@@ -1,0 +1,997 @@
+/*
+ * One stylesheet, plain CSS, no framework.
+ *
+ * The control plane is dense tables and forms. A utility framework would add a
+ * build step and 30 classes per row for layout this small; custom properties and
+ * a few hundred rules cover it and stay readable.
+ *
+ * Colours are declared once as tokens and re-declared for dark mode, so nothing
+ * hard-codes a hex value at a use site. Every surface, border and shadow comes
+ * from the same short scale — that is what makes fourteen unrelated pages read
+ * as one tool rather than fourteen.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* Neutrals: one hue, walked from page background up to the highest surface. */
+  --bg: #f4f5f8;
+  --bg-accent: #eceff5;
+  --surface: #ffffff;
+  --surface-2: #f4f6fa;
+  --surface-3: #e9edf4;
+  --border: #dfe3ec;
+  --border-strong: #c6ccdb;
+  --text: #0e1420;
+  --text-muted: #5a6478;
+  --text-faint: #8b94a6;
+
+  --accent: #3355e0;
+  --accent-hover: #2743bd;
+  --accent-soft: #e8ecfd;
+  --accent-contrast: #ffffff;
+
+  --danger: #b3261e;
+  --danger-bg: #fdecea;
+  --warning: #8a5a00;
+  --warning-bg: #fff5e0;
+  --success: #12653d;
+  --success-bg: #e4f4ec;
+
+  /* Chart series. Ordered by distinguishability, not by hue wheel. */
+  --series-1: #3355e0;
+  --series-2: #12876a;
+  --series-3: #a0522d;
+  --series-4: #7541b8;
+  --series-5: #b3261e;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+  --gap: 14px;
+
+  --shadow-sm: 0 1px 2px rgb(14 20 32 / 6%);
+  --shadow-md: 0 2px 8px -2px rgb(14 20 32 / 10%), 0 1px 2px rgb(14 20 32 / 5%);
+  --shadow-pop: 0 12px 32px -12px rgb(14 20 32 / 28%);
+
+  --font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1017;
+    --bg-accent: #10141d;
+    --surface: #161b25;
+    --surface-2: #1d2330;
+    --surface-3: #252c3b;
+    --border: #2a3140;
+    --border-strong: #3a4356;
+    --text: #e9ecf4;
+    --text-muted: #98a2b6;
+    --text-faint: #6e7889;
+
+    --accent: #7f9cff;
+    --accent-hover: #9ab1ff;
+    --accent-soft: #1b2440;
+    --accent-contrast: #0d1017;
+
+    --danger: #ff9d95;
+    --danger-bg: #341a18;
+    --warning: #ffd08a;
+    --warning-bg: #342a13;
+    --success: #7fd6a8;
+    --success-bg: #11301f;
+
+    --series-1: #7f9cff;
+    --series-2: #58c9a4;
+    --series-3: #d99a6c;
+    --series-4: #b795f0;
+    --series-5: #ff9d95;
+
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
+    --shadow-md: 0 2px 10px -3px rgb(0 0 0 / 55%);
+    --shadow-pop: 0 14px 34px -12px rgb(0 0 0 / 70%);
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover,
+a:focus-visible {
+  text-decoration: underline;
+}
+
+/* A visible focus ring everywhere. Removing it is the single most common
+   accessibility regression in an admin tool driven by keyboard. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  background: var(--accent);
+  color: var(--accent-contrast);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  z-index: 100;
+}
+
+.skip-link:focus {
+  left: 8px;
+  top: 8px;
+}
+
+/* --- shell ---------------------------------------------------------------- */
+
+.shell {
+  display: grid;
+  grid-template-columns: 248px minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  padding: 18px 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px 14px;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(140deg, var(--accent), var(--series-4));
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: -0.02em;
+  flex: none;
+}
+
+.brand h1 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+
+.brand .env {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin: 0;
+}
+
+.who {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  margin: 0 0 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-items: flex-start;
+}
+
+.who .email {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+  line-height: 1.35;
+}
+
+.sidebar nav {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.nav-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  padding: 14px 10px 5px;
+}
+
+.nav-group:first-child {
+  padding-top: 0;
+}
+
+.sidebar nav a {
+  color: var(--text-muted);
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid transparent;
+}
+
+.sidebar nav a:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar nav a[aria-current="page"] {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.nav-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentcolor;
+  opacity: 0.35;
+  flex: none;
+}
+
+.sidebar nav a[aria-current="page"] .nav-dot {
+  opacity: 1;
+}
+
+.sidebar-footer {
+  margin-top: auto;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+main {
+  padding: 26px 30px 72px;
+  min-width: 0;
+  max-width: 1560px;
+}
+
+@media (max-width: 900px) {
+  .shell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .sidebar nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .nav-group {
+    width: 100%;
+    padding: 8px 4px 2px;
+  }
+
+  .sidebar-footer {
+    margin-top: 14px;
+    flex-direction: row;
+    align-items: center;
+  }
+
+  main {
+    padding: 16px;
+  }
+}
+
+/* --- typography ----------------------------------------------------------- */
+
+h2 {
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 0 0 3px;
+}
+
+h3 {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin: 28px 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* A hairline that runs out to the right of every section label, so the eye can
+   see where one block of the page stops without another border box. */
+h3::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.subtitle {
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 78ch;
+}
+
+code,
+.mono {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+/* --- cards and stats ------------------------------------------------------ */
+
+.grid {
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+  margin-bottom: 22px;
+}
+
+/* The headline row: fewer, larger, always the numbers an operator opens the
+   page to see. */
+.grid-hero {
+  grid-template-columns: repeat(auto-fit, minmax(224px, 1fr));
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+}
+
+.card .label {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.card .value {
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.025em;
+  margin-top: 5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+}
+
+.grid-hero .card .value {
+  font-size: 32px;
+}
+
+.card .hint {
+  color: var(--text-faint);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+/* A 3px rail down the left edge is the whole tone treatment: enough to scan a
+   grid for the red one, not enough to turn the page into a traffic light. */
+.card[data-tone]::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+}
+
+.card[data-tone="ok"]::before {
+  background: var(--success);
+}
+
+.card[data-tone="warn"]::before {
+  background: var(--warning);
+}
+
+.card[data-tone="bad"]::before {
+  background: var(--danger);
+}
+
+.card[data-tone="accent"]::before {
+  background: var(--accent);
+}
+
+/* --- inline bars ---------------------------------------------------------- */
+
+/*
+ * A share bar drawn with a div, not a chart library. The control plane compares
+ * a handful of rows against a total; that is a width, and a width does not need
+ * 90KB of JavaScript or a client component.
+ */
+.bar-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  overflow: hidden;
+  min-width: 60px;
+}
+
+.bar-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+}
+
+.bar-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bar-row .bar-track {
+  flex: 1;
+}
+
+.meter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+/* --- tables --------------------------------------------------------------- */
+
+.table-wrap {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow-x: auto;
+  box-shadow: var(--shadow-sm);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+th {
+  background: var(--surface-2);
+  font-weight: 650;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+td.wrap,
+th.wrap {
+  white-space: normal;
+  min-width: 220px;
+  vertical-align: top;
+}
+
+tbody tr:last-child td {
+  border-bottom: none;
+}
+
+tbody tr:hover {
+  background: var(--surface-2);
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- states --------------------------------------------------------------- */
+
+.empty,
+.loading {
+  padding: 44px 16px;
+  text-align: center;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-2), var(--surface-3), var(--surface-2));
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+  border-radius: 4px;
+  height: 14px;
+}
+
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+.alert {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  border: 1px solid transparent;
+}
+
+.alert-error {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.alert-warning {
+  background: var(--warning-bg);
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.alert-success {
+  background: var(--success-bg);
+  border-color: var(--success);
+  color: var(--success);
+}
+
+/* --- badges --------------------------------------------------------------- */
+
+.badge {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.badge-ok {
+  background: var(--success-bg);
+  color: var(--success);
+  border-color: color-mix(in srgb, var(--success) 40%, transparent);
+}
+
+.badge-warn {
+  background: var(--warning-bg);
+  color: var(--warning);
+  border-color: color-mix(in srgb, var(--warning) 40%, transparent);
+}
+
+.badge-bad {
+  background: var(--danger-bg);
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+.badge-accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+/* --- forms ---------------------------------------------------------------- */
+
+form.filters {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  margin-bottom: 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field label {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 650;
+}
+
+input,
+select,
+textarea {
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  min-width: 0;
+}
+
+input:hover:not(:disabled),
+select:hover:not(:disabled),
+textarea:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-faint);
+}
+
+textarea {
+  min-height: 80px;
+  resize: vertical;
+  font-family: var(--mono);
+}
+
+button {
+  font: inherit;
+  font-size: 13px;
+  font-weight: 650;
+  padding: 7px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+button.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  color: var(--accent-contrast);
+}
+
+button.danger {
+  background: var(--danger-bg);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.error-text {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+fieldset {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin: 0 0 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+legend {
+  font-weight: 650;
+  font-size: 12px;
+  padding: 0 8px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Two columns of fields on a wide screen; one on a narrow one. Persona and plan
+   forms are long enough that a single column makes the operator scroll past the
+   submit button to find the field they wanted. */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 12px 16px;
+}
+
+.form-grid .span-all {
+  grid-column: 1 / -1;
+}
+
+/* --- high-risk confirmation ---------------------------------------------- */
+
+details.risk {
+  border: 1px solid color-mix(in srgb, var(--danger) 50%, var(--border));
+  border-radius: var(--radius);
+  background: var(--danger-bg);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+}
+
+details.risk summary {
+  cursor: pointer;
+  font-weight: 650;
+  color: var(--danger);
+}
+
+details.risk[open] summary {
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
+}
+
+/* --- pagination ----------------------------------------------------------- */
+
+.pagination {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.pagination a {
+  padding: 5px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.pagination a:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.pagination .disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* --- login ---------------------------------------------------------------- */
+
+.login-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background:
+    radial-gradient(1000px 460px at 50% -8%, var(--accent-soft), transparent 70%),
+    var(--bg);
+}
+
+.login-card {
+  width: min(408px, 100%);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 30px;
+  box-shadow: var(--shadow-pop);
+}
+
+.login-card h1 {
+  font-size: 21px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 0 0 4px;
+}
+
+.login-card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 20px;
+}
+
+/* --- conversation timeline ------------------------------------------------ */
+
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.turn {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 11px 15px;
+  box-shadow: var(--shadow-sm);
+}
+
+.turn header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+
+.turn p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.turn.assistant {
+  border-left: 3px solid var(--accent);
+}
+
+.turn.student {
+  border-left: 3px solid var(--border-strong);
+}
+
+/* --- key/value blocks ----------------------------------------------------- */
+
+dl.kv {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0;
+  margin: 0 0 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  box-shadow: var(--shadow-sm);
+}
+
+dl.kv dt {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  padding: 8px 16px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+dl.kv dd {
+  margin: 0;
+  padding: 8px 16px;
+  word-break: break-word;
+  border-bottom: 1px solid var(--border);
+}
+
+dl.kv dt:last-of-type,
+dl.kv dd:last-of-type {
+  border-bottom: none;
+}
+
+.row-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* A segmented control built from links, so the window filter survives with
+   JavaScript off and each option is a real, shareable URL. */
+.segmented {
+  display: inline-flex;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 2px;
+  gap: 2px;
+}
+
+.segmented a {
+  padding: 4px 11px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text-muted);
+}
+
+.segmented a:hover {
+  color: var(--text);
+  text-decoration: none;
+}
+
+.segmented a[aria-current="page"] {
+  background: var(--surface);
+  color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.avatar {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  object-fit: cover;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

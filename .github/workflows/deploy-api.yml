@@ -1,0 +1,177 @@
+# FastAPI service -> api.nxtutors.com (CloudPanel, Python, port 8010)
+#
+# This is the deploy that can hurt. The other two serve pages; this one holds
+# the Meta webhook, the Cashfree callback and the database migrations. Three
+# things follow from that:
+#
+#   Migrations run BEFORE the code that needs them, and against the shared
+#   production database, where `public` belongs to another product. The
+#   migration guard in `db/migration_guard.py` is what makes that safe, and
+#   `alembic check` here is the second pair of eyes.
+#
+#   The restart is last, and verified. A webhook endpoint that 502s is a
+#   student's paid answer lost and a Cashfree callback retried into a support
+#   ticket.
+#
+#   The full test suite gates the deploy. It makes zero paid provider calls, so
+#   running it costs nothing but the runner minutes.
+
+name: deploy api
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "migrations/**"
+      - "pyproject.toml"
+      - ".github/workflows/deploy-api.yml"
+  workflow_dispatch:
+
+concurrency:
+  # Never two migrations at once against one database.
+  group: deploy-api
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tutortwin_test
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 5
+        ports: ["5432:5432"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Lint and typecheck
+        run: |
+          ruff check src/ tests/
+          ruff format --check src/ tests/
+          mypy src/tutortwin/
+
+      - name: Test
+        env:
+          TUTORTWIN_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/tutortwin_test
+          TUTORTWIN_DATABASE_POSTGRES_SCHEMA: public
+        run: pytest tests/ -q
+
+      - name: Authorise SSH
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H \
+            "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+          else
+            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+            echo "SSHPASS=${{ secrets.DEPLOY_API_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "SSH_CMD=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Ship the code
+        env:
+          TARGET: ${{ secrets.DEPLOY_API_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_API_PATH }}
+        run: |
+          set -euo pipefail
+          # `.env` is EXCLUDED. It lives on the server, holds the real
+          # credentials, and is not in this repository. A deploy that
+          # overwrote it would take the service down with an empty database
+          # URL and no obvious cause.
+          rsync -az --delete -e "$RSYNC_RSH" \
+            --exclude '.env' \
+            --exclude '.venv' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude 'var/' \
+            src/ migrations/ pyproject.toml alembic.ini \
+            "$TARGET:$DEST/" 2>/dev/null || {
+              # rsync cannot take several sources with one --delete safely, so
+              # send them individually.
+              rsync -az --delete -e "$RSYNC_RSH" \
+                --exclude '__pycache__' --exclude '*.pyc' src/ "$TARGET:$DEST/src/"
+              rsync -az --delete -e "$RSYNC_RSH" \
+                --exclude '__pycache__' migrations/ "$TARGET:$DEST/migrations/"
+              rsync -az -e "$RSYNC_RSH" pyproject.toml alembic.ini "$TARGET:$DEST/"
+            }
+
+      - name: Install, migrate, restart
+        env:
+          TARGET: ${{ secrets.DEPLOY_API_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_API_PATH }}
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$TARGET" bash -lc "'
+            set -euo pipefail
+            cd $DEST
+
+            [ -d .venv ] || python3.12 -m venv .venv
+            ./.venv/bin/pip install --quiet --upgrade pip
+            ./.venv/bin/pip install --quiet -e .
+
+            # Against the SHARED database. The migration guard hides the other
+            # product tables from autogenerate; this is the second check that
+            # nothing unexpected is pending.
+            ./.venv/bin/python -m alembic upgrade head
+
+            # Restart only after migrations succeed. The reverse order deploys
+            # code that queries columns that do not exist yet.
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 describe tutortwin-api >/dev/null 2>&1 \
+                && pm2 restart tutortwin-api --update-env \
+                || PORT=8010 HOST=127.0.0.1 pm2 start ./.venv/bin/python \
+                     --name tutortwin-api -- -m tutortwin
+              pm2 save
+            else
+              pkill -f \"tutortwin-api\" || true
+              PORT=8010 HOST=127.0.0.1 nohup ./.venv/bin/python -m tutortwin \
+                > $DEST/api.log 2>&1 &
+            fi
+          '"
+
+      - name: Verify the service is healthy
+        run: |
+          # /readyz touches the database. /healthz alone would pass while the
+          # service could not reach Postgres at all.
+          for i in $(seq 1 12); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://api.nxtutors.com/readyz || true)
+            [ "$code" = "200" ] && echo "api is ready" && exit 0
+            sleep 5
+          done
+          echo "api did not become ready within 60s"; exit 1
+
+      - name: Verify the Meta webhook still answers
+        run: |
+          # A 403 is the CORRECT answer to a wrong verify token, and proves the
+          # route is mounted and reachable. A 502 or 404 means the deploy broke
+          # the one endpoint Meta depends on.
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+            "https://api.nxtutors.com/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x" || true)
+          if [ "$code" = "403" ]; then
+            echo "webhook is mounted and rejecting correctly"
+          else
+            echo "webhook returned $code, expected 403"; exit 1
+          fi

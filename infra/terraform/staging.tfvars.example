@@ -1,0 +1,29 @@
+# Copy to staging.tfvars and fill in. Never commit the filled version.
+project_id  = "nxtutors-tutortwin"
+region      = "asia-south1"
+environment = "staging"
+
+api_image   = "asia-south1-docker.pkg.dev/nxtutors-tutortwin/tutortwin/api:sha-abc1234"
+admin_image = "asia-south1-docker.pkg.dev/nxtutors-tutortwin/tutortwin/admin:sha-abc1234"
+
+# Non-secret configuration only. Anything here is readable by any project viewer.
+api_env = {
+  TUTORTWIN_ENVIRONMENT             = "staging"
+  TUTORTWIN_R2_ACCOUNT_ID           = "your-cloudflare-account-id"
+  TUTORTWIN_R2_BUCKET               = "tutortwin-media-staging"
+  TUTORTWIN_TASKS_PROJECT           = "nxtutors-tutortwin"
+  TUTORTWIN_TASKS_LOCATION          = "asia-south1"
+  TUTORTWIN_TASKS_QUEUE             = "tutortwin-media-staging"
+  TUTORTWIN_LOG_LEVEL               = "INFO"
+  # Ceilings. Lower in staging than production on purpose: a load test that
+  # escapes should hit a wall long before it hits an invoice.
+  TUTORTWIN_SYSTEM_DAILY_BUDGET_MICROS  = "5000000"
+  TUTORTWIN_SYSTEM_HOURLY_BUDGET_MICROS = "1000000"
+  TUTORTWIN_HEAVY_JOB_MAX_CONCURRENCY   = "5"
+}
+
+# Two values are only known after the first apply, because they are the service's
+# own URL. Apply once, read the outputs, put them here, apply again:
+#   TUTORTWIN_TASKS_TARGET_URL = <tasks_target_url output>
+#   TUTORTWIN_OIDC_AUDIENCE    = <oidc_audience output>
+#   TUTORTWIN_TASKS_SERVICE_ACCOUNT / TUTORTWIN_OIDC_SERVICE_ACCOUNT = <tasks_service_account output>

@@ -1,0 +1,126 @@
+# Admin control plane -> tutortwinadmin.nxtutors.com (CloudPanel, Node.js, port 3011)
+#
+# Built in CI and shipped as artefacts. The server never runs `npm run build`:
+# a Next.js build wants ~1GB of RAM and several CPU-seconds, and doing it on the
+# box that is serving students means a deploy competes with live traffic. CI has
+# nothing else to do.
+#
+# `paths` scoping matters. Without it every push to the API redeploys the
+# marketing site, which is churn and, on a bad day, an unrelated outage.
+
+name: deploy admin
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/admin/**"
+      - ".github/workflows/deploy-admin.yml"
+  workflow_dispatch:
+
+concurrency:
+  # Two deploys rsyncing into the same directory interleave files and leave a
+  # half-old, half-new tree. Queue them instead.
+  group: deploy-admin
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.9"
+          cache: npm
+          cache-dependency-path: apps/admin/package-lock.json
+
+      - name: Install
+        working-directory: apps/admin
+        run: npm ci
+
+      - name: Typecheck and lint
+        working-directory: apps/admin
+        run: npm run typecheck && npm run lint && npm run test
+
+      - name: Build
+        working-directory: apps/admin
+        run: npm run build
+
+      - name: Authorise SSH
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H \
+            "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          if [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+            chmod 600 ~/.ssh/deploy_key
+            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+          else
+            # Password fallback. Works, but every run puts the password in the
+            # process table of the runner; move to a key when you can.
+            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+            echo "SSHPASS=${{ secrets.DEPLOY_ADMIN_PASSWORD }}" >> "$GITHUB_ENV"
+            echo "SSH_CMD=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Ship the build
+        env:
+          TARGET: ${{ secrets.DEPLOY_ADMIN_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_ADMIN_PATH }}
+        run: |
+          set -euo pipefail
+
+          # `standalone` is the whole runtime: Next traces the imports and
+          # bundles only what the server actually loads, so node_modules is
+          # never copied. Three rsyncs because Next deliberately leaves static
+          # and public OUTSIDE the standalone tree.
+          rsync -az --delete -e "$RSYNC_RSH" \
+            apps/admin/.next/standalone/ "$TARGET:$DEST/"
+
+          # No --delete here: it would wipe the standalone files just copied in.
+          rsync -az -e "$RSYNC_RSH" \
+            apps/admin/.next/static/ "$TARGET:$DEST/.next/static/"
+
+          if [ -d apps/admin/public ]; then
+            rsync -az -e "$RSYNC_RSH" \
+              apps/admin/public/ "$TARGET:$DEST/public/"
+          fi
+
+      - name: Restart
+        env:
+          TARGET: ${{ secrets.DEPLOY_ADMIN_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_ADMIN_PATH }}
+        run: |
+          set -euo pipefail
+          $SSH_CMD "$TARGET" bash -lc "'
+            cd $DEST
+            export PORT=3011 HOSTNAME=127.0.0.1
+            export TUTORTWIN_API_URL=https://api.nxtutors.com
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 describe tutortwin-admin >/dev/null 2>&1 \
+                && pm2 restart tutortwin-admin --update-env \
+                || pm2 start server.js --name tutortwin-admin
+              pm2 save
+            else
+              # No PM2: nohup is a stopgap that does NOT survive a reboot.
+              pkill -f \"$DEST/server.js\" || true
+              nohup node server.js > $DEST/admin.log 2>&1 &
+            fi
+          '"
+
+      - name: Verify it is actually serving
+        run: |
+          # A deploy that restarts a process and never checks is a deploy that
+          # reports success while the site returns 502.
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://tutortwinadmin.nxtutors.com/login || true)
+            [ "$code" = "200" ] && echo "admin is up" && exit 0
+            sleep 6
+          done
+          echo "admin did not return 200 after 60s"; exit 1

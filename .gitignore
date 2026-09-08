@@ -1,0 +1,70 @@
+# --- secrets -----------------------------------------------------------------
+# Anything holding a real credential. `.env.example` is deliberately NOT here:
+# it is the template the README tells you to copy, it carries only localhost
+# defaults and placeholders, and ignoring it leaves a new clone with nothing to
+# copy from.
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# Next.js reads these and they hold per-environment config. `.env.local` is NOT
+# matched by a bare `.env` pattern, which is the gap that would have committed
+# apps/site/.env.local and apps/admin/.env.local.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# Keys, certificates, service-account files.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+*service-account*.json
+*credentials*.json
+!package-lock.json
+
+# --- python ------------------------------------------------------------------
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Media, blobs and anything the pipeline writes at runtime.
+var/
+
+# --- node / next.js ----------------------------------------------------------
+node_modules/
+.next/
+out/
+next-env.d.ts
+tsconfig.tsbuildinfo
+test-results/
+playwright-report/
+blob-report/
+.turbo/
+
+# --- infrastructure ----------------------------------------------------------
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+
+# --- editors / os ------------------------------------------------------------
+.DS_Store
+Thumbs.db
+.idea/
+*.swp

@@ -1,0 +1,140 @@
+[project]
+name = "nxtutors-tutortwin"
+version = "0.1.0"
+description = "TutorTwin - standalone AI education Meta Agent for NX Tutors"
+requires-python = ">=3.12,<3.13"
+
+# Everything the service imports at runtime, pinned. Phases 02-06 added most of
+# this; it was installed in the development environment without being declared,
+# which meant `pip install -e .` from a clean clone produced a package that
+# imported and then failed on the first request. Every version here is the one
+# the suite is green against.
+dependencies = [
+    # web
+    "fastapi==0.141.1",
+    "uvicorn[standard]==0.52.4",
+    "pydantic==2.13.5",
+    "pydantic-settings==2.15.0",
+    "email-validator==2.3.0",           # pydantic EmailStr, for admin accounts
+    # persistence
+    "sqlalchemy==2.0.52",
+    "alembic==1.19.1",
+    "psycopg[binary]==3.3.4",
+    "pgvector==0.5.0",
+    # observability
+    "structlog==26.1.0",
+    # admin credentials
+    "argon2-cffi==25.1.0",
+    # paid vendors - OpenAI and Anthropic only, by constraint
+    "anthropic==1.2.0",
+    "openai==3.6.0",
+    # media pipeline
+    "filetype==1.2.0",                  # MIME sniffed from magic bytes, never declared
+    "pymupdf==1.28.2",
+    "pytesseract==0.3.13",              # binds the tesseract binary, which is optional
+    # RUNTIME, not a test tool: the WhatsApp Graph client and the Cashfree
+    # client both import it at module level, so without it here the
+    # production image cannot import the API at all.
+    "httpx==0.28.1",
+    "pillow==12.3.0",
+    # learning engine
+    "sympy==1.14.0",
+    "pint==0.25.3",
+    "matplotlib==3.11.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.1.1",
+    "pytest-asyncio==1.4.0",
+    "pytest-cov==7.1.0",
+    "httpx==0.28.1",
+    "httpx2==2.12.0",                   # the vendor SDKs' transport, for adapter tests
+    "ruff==0.16.5",
+    "mypy==2.3.1",
+]
+
+# Google Cloud only. Both are imported lazily inside their adapters, so a
+# deployment that uses neither R2 nor Cloud Tasks - local, test, or a future
+# non-GCP host - never installs them and never imports them.
+#
+# A deployed environment DOES need them: `require_deployable()` refuses to start
+# without the R2 and Cloud Tasks settings, and the adapters those settings select
+# import from here.
+gcp = [
+    "boto3==1.43.89",                   # R2 speaks the S3 protocol; this is not AWS S3
+    "google-cloud-tasks==2.24.0",
+    "google-auth==2.57.1",              # OIDC verification on /internal/*
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tutortwin"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "S", "ASYNC"]
+ignore = ["S101"]
+
+[tool.ruff.lint.per-file-ignores]
+# S608: these modules compose SQL from a code-generated visibility predicate
+# built only from string literals; every value travels as a bound parameter and
+# RetrievalScope rejects non-UUID input before it can reach SQL. Verified by
+# test_scope_always_binds_the_subject and the predicate unit tests.
+"src/tutortwin/rag/vector_store.py" = ["S608"]
+"src/tutortwin/rag/service.py" = ["S608"]
+# B008: FastAPI's Depends()-in-defaults is the framework idiom.
+"src/tutortwin/api/routes/*" = ["B008"]
+"tests/*" = ["S105", "S106"]
+"migrations/*" = ["E501"]
+
+[tool.mypy]
+python_version = "3.12"
+packages = ["tutortwin"]
+mypy_path = "src"
+strict = true
+warn_unused_ignores = true
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false
+
+# Third-party media libraries ship no type information. Their call sites are
+# wrapped in our own typed functions, so the untyped surface stays contained.
+[[tool.mypy.overrides]]
+module = ["filetype.*", "pytesseract.*", "pymupdf.*", "fitz.*", "google.*", "boto3.*", "botocore.*"]
+ignore_missing_imports = true
+disallow_untyped_calls = false
+
+# SymPy and Pint are untyped for the same reason. Every call into them is behind
+# `learning.verification`, which returns our own typed result objects, so the
+# untyped surface stops at that module boundary.
+[[tool.mypy.overrides]]
+module = ["sympy.*", "pint.*"]
+ignore_missing_imports = true
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["tutortwin.media.pdf", "tutortwin.media.ocr", "tutortwin.media.validation"]
+disallow_untyped_calls = false
+
+[[tool.mypy.overrides]]
+module = ["tutortwin.learning.verification", "tutortwin.learning.twin", "tutortwin.learning.visuals"]
+disallow_untyped_calls = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+markers = ["integration: requires a live PostgreSQL database"]
+
+[tool.coverage.run]
+source = ["src/tutortwin"]
+branch = true

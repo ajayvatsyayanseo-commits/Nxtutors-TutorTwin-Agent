@@ -1,0 +1,922 @@
+/*
+ * One stylesheet, no framework.
+ *
+ * The admin panel made the same call and it holds here for a different reason:
+ * this page is the first thing a parent sees on a mid-range Android phone over
+ * patchy mobile data. Every kilobyte of framework CSS is a kilobyte competing
+ * with the thing that actually converts, which is the page appearing quickly.
+ */
+
+:root {
+  --ink: #0b1020;
+  --ink-soft: #1a2138;
+  --paper: #ffffff;
+  --paper-warm: #f7f8fc;
+
+  --brand: #4f46e5;
+  --brand-bright: #6366f1;
+  --brand-soft: #eef2ff;
+  --accent: #f59e0b;
+  --success: #059669;
+
+  --text: #0b1020;
+  --text-muted: #55607d;
+  --text-invert: #f8fafc;
+
+  --line: #e4e7f2;
+  --radius: 16px;
+  --radius-sm: 10px;
+  --shadow: 0 1px 2px rgba(11, 16, 32, 0.04), 0 12px 32px rgba(11, 16, 32, 0.08);
+  --shadow-lift: 0 2px 4px rgba(11, 16, 32, 0.05), 0 24px 56px rgba(11, 16, 32, 0.14);
+
+  --measure: 66ch;
+  --gutter: clamp(1.25rem, 5vw, 4rem);
+}
+
+/* The site commits to a light look deliberately: it is an advert, and it must
+   look identical in every screenshot, share card and WhatsApp preview. Colours
+   are therefore painted explicitly rather than inherited from the OS. */
+* {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--text);
+  font-family:
+    "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1,
+h2,
+h3 {
+  line-height: 1.15;
+  letter-spacing: -0.022em;
+  margin: 0;
+  font-weight: 700;
+}
+
+h1 {
+  font-size: clamp(2.25rem, 6vw, 4rem);
+}
+h2 {
+  font-size: clamp(1.7rem, 4vw, 2.6rem);
+}
+h3 {
+  font-size: 1.15rem;
+}
+
+p {
+  margin: 0;
+}
+
+a {
+  color: var(--brand);
+}
+
+img {
+  max-width: 100%;
+}
+
+.shell {
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  padding-inline: var(--gutter);
+}
+
+/* ---------------------------------------------------------------- header -- */
+
+.masthead {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--line);
+}
+
+.masthead__inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  height: 68px;
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.wordmark__dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--brand-bright), var(--brand));
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.footer__brand {
+  display: flex;
+  width: fit-content;
+  align-items: center;
+  gap: 0.55rem;
+  margin-bottom: 0.75rem;
+  font-weight: 800;
+  font-size: 1.15rem;
+  letter-spacing: -0.01em;
+  color: #fff;
+  text-decoration: none;
+}
+
+/* The logo file is a square that also bakes in the "NXtutors" wordmark, so
+   crop to just the NX icon wherever we set our own text beside it. */
+.logo-mark {
+  overflow: hidden;
+  background: #fff;
+  flex: 0 0 auto;
+  display: block;
+}
+
+.logo-mark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  transform: scale(2.3);
+  transform-origin: 48% 40%;
+}
+
+.logo-mark--lg {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+}
+
+/* ---------------------------------------------------------------- button -- */
+
+.btn {
+  --btn-bg: var(--brand);
+  --btn-fg: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.85rem 1.5rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.98rem;
+  text-decoration: none;
+  cursor: pointer;
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    background-color 140ms ease;
+  box-shadow: 0 6px 18px rgba(79, 70, 229, 0.28);
+}
+
+.btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 26px rgba(79, 70, 229, 0.34);
+}
+
+.btn:active {
+  transform: translateY(0);
+}
+
+.btn:focus-visible {
+  outline: 3px solid var(--brand-bright);
+  outline-offset: 3px;
+}
+
+.btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+.btn--ghost {
+  --btn-bg: transparent;
+  --btn-fg: var(--ink);
+  border-color: var(--line);
+  box-shadow: none;
+}
+
+.btn--ghost:hover {
+  background: var(--paper-warm);
+  box-shadow: none;
+}
+
+.btn--lg {
+  padding: 1.05rem 2rem;
+  font-size: 1.05rem;
+}
+
+.btn--block {
+  width: 100%;
+}
+
+/* ------------------------------------------------------------------ hero -- */
+
+.hero {
+  position: relative;
+  padding: clamp(3.5rem, 9vw, 7rem) 0 clamp(3rem, 7vw, 5.5rem);
+  overflow: hidden;
+}
+
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: -30% -10% auto -10%;
+  height: 620px;
+  background:
+    radial-gradient(50% 50% at 20% 30%, rgba(99, 102, 241, 0.16), transparent 70%),
+    radial-gradient(45% 45% at 80% 20%, rgba(245, 158, 11, 0.14), transparent 70%);
+  pointer-events: none;
+}
+
+.hero__grid {
+  position: relative;
+  display: grid;
+  gap: clamp(2.5rem, 5vw, 4rem);
+  grid-template-columns: 1fr;
+  align-items: center;
+}
+
+@media (min-width: 960px) {
+  .hero__grid {
+    grid-template-columns: 1.05fr 0.95fr;
+  }
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: 999px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  font-size: 0.85rem;
+  font-weight: 600;
+  margin-bottom: 1.25rem;
+}
+
+.pulse {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.82);
+  }
+}
+
+.hero__lede {
+  font-size: clamp(1.06rem, 2.2vw, 1.3rem);
+  color: var(--text-muted);
+  max-width: 54ch;
+  margin-top: 1.4rem;
+}
+
+.hero__cta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+  margin-top: 2.2rem;
+  align-items: center;
+}
+
+.price-note {
+  font-size: 0.92rem;
+  color: var(--text-muted);
+}
+
+.price-note strong {
+  color: var(--ink);
+}
+
+/* --------------------------------------------------------------- phone -- */
+
+.phone {
+  position: relative;
+  margin-inline: auto;
+  width: min(330px, 82vw);
+  border-radius: 34px;
+  background: #0f1626;
+  padding: 12px;
+  box-shadow: var(--shadow-lift);
+  animation: float 7s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+.phone__screen {
+  border-radius: 24px;
+  background: #ece5dd;
+  padding: 0.9rem 0.75rem 1.1rem;
+  min-height: 470px;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.phone__bar {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.4rem 0.7rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.07);
+  margin-bottom: 0.3rem;
+}
+
+.phone__avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--brand-bright), var(--brand));
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.8rem;
+}
+
+.phone__who {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #0b1020;
+  line-height: 1.2;
+}
+
+.phone__status {
+  font-size: 0.68rem;
+  color: #667;
+}
+
+.bubble {
+  max-width: 84%;
+  padding: 0.55rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  box-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .bubble {
+    opacity: 0;
+    animation: rise 0.5s ease forwards;
+  }
+}
+
+.bubble--them {
+  background: #fff;
+  align-self: flex-start;
+  border-top-left-radius: 3px;
+}
+
+.bubble--me {
+  background: #d9fdd3;
+  align-self: flex-end;
+  border-top-right-radius: 3px;
+}
+
+.bubble--img {
+  padding: 0.4rem;
+}
+
+.bubble__photo {
+  width: 100%;
+  height: 78px;
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      #cbd5f5 0 1px,
+      transparent 1px 13px
+    ),
+    linear-gradient(135deg, #eef2ff, #e0e7ff);
+  display: grid;
+  place-items: center;
+  font-size: 0.66rem;
+  color: #4b5563;
+  margin-bottom: 0.35rem;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* The conversation is the hero. Staged fast enough that the phone is never
+   an empty rectangle while somebody is deciding whether to read on - the whole
+   exchange lands inside two seconds rather than three and a half. */
+.b1 { animation-delay: 0.2s; }
+.b2 { animation-delay: 0.6s; }
+.b3 { animation-delay: 1.0s; }
+.b4 { animation-delay: 1.45s; }
+.b5 { animation-delay: 1.8s; }
+
+.typing {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.typing span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #9aa3b5;
+  animation: blink 1.3s infinite ease-in-out;
+}
+
+.typing span:nth-child(2) { animation-delay: 0.18s; }
+.typing span:nth-child(3) { animation-delay: 0.36s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+
+/* -------------------------------------------------------------- sections -- */
+
+.section {
+  padding: clamp(3.5rem, 8vw, 6rem) 0;
+}
+
+.section--warm {
+  background: var(--paper-warm);
+  border-block: 1px solid var(--line);
+}
+
+.section__head {
+  max-width: var(--measure);
+  margin-bottom: clamp(2rem, 4vw, 3rem);
+}
+
+.section__head p {
+  color: var(--text-muted);
+  margin-top: 0.9rem;
+  font-size: 1.05rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1.15rem;
+  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+}
+
+.card {
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1.5rem;
+  transition:
+    transform 180ms ease,
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow);
+  border-color: #cdd3e8;
+}
+
+.card__icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  display: grid;
+  place-items: center;
+  font-size: 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.card h3 {
+  margin-bottom: 0.5rem;
+}
+
+.card p {
+  color: var(--text-muted);
+  font-size: 0.95rem;
+}
+
+/* ----------------------------------------------------------------- steps -- */
+
+.steps {
+  display: grid;
+  gap: 1.15rem;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  counter-reset: step;
+}
+
+.step {
+  position: relative;
+  padding: 1.5rem 1.25rem 1.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.step::before {
+  counter-increment: step;
+  content: counter(step);
+  position: absolute;
+  top: -16px;
+  left: 1.25rem;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 0.9rem;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.3);
+}
+
+.step h3 {
+  margin: 0.5rem 0 0.4rem;
+}
+
+.step p {
+  color: var(--text-muted);
+  font-size: 0.94rem;
+}
+
+/* ---------------------------------------------------------------- pricing -- */
+
+.pricing {
+  display: grid;
+  place-items: center;
+}
+
+.plan {
+  width: min(440px, 100%);
+  background: var(--paper);
+  border: 2px solid var(--brand);
+  border-radius: 22px;
+  padding: 2.25rem;
+  text-align: center;
+  box-shadow: var(--shadow-lift);
+  position: relative;
+}
+
+.plan__tag {
+  position: absolute;
+  top: -13px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--accent);
+  color: #3b2600;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.3rem 0.85rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.plan__price {
+  font-size: 3.6rem;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  margin: 1rem 0 0.35rem;
+}
+
+.plan__price span {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0;
+}
+
+.plan__list {
+  list-style: none;
+  margin: 1.75rem 0;
+  padding: 0;
+  text-align: left;
+  display: grid;
+  gap: 0.7rem;
+}
+
+.plan__list li {
+  display: flex;
+  gap: 0.65rem;
+  align-items: flex-start;
+  font-size: 0.96rem;
+}
+
+.tick {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #d1fae5;
+  color: var(--success);
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  font-weight: 800;
+  margin-top: 2px;
+}
+
+/* ------------------------------------------------------------------ form -- */
+
+.panel {
+  width: min(620px, 100%);
+  margin-inline: auto;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: clamp(1.5rem, 4vw, 2.5rem);
+  box-shadow: var(--shadow);
+}
+
+.field {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 1.15rem;
+}
+
+.field label {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+.field .hint {
+  font-size: 0.83rem;
+  color: var(--text-muted);
+}
+
+.field input,
+.field select {
+  font: inherit;
+  font-size: 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--text);
+  width: 100%;
+  transition: border-color 130ms ease, box-shadow 130ms ease;
+}
+
+.field input:focus,
+.field select:focus {
+  outline: none;
+  border-color: var(--brand-bright);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+.field input:invalid:not(:placeholder-shown) {
+  border-color: #dc2626;
+}
+
+.row {
+  display: grid;
+  gap: 1.15rem;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 620px) {
+  .row {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.notice {
+  padding: 0.85rem 1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
+  margin-bottom: 1.25rem;
+  border: 1px solid transparent;
+}
+
+.notice--error {
+  background: #fef2f2;
+  border-color: #fecaca;
+  color: #991b1b;
+}
+
+.notice--info {
+  background: var(--brand-soft);
+  border-color: #c7d2fe;
+  color: #3730a3;
+}
+
+.notice--ok {
+  background: #ecfdf5;
+  border-color: #a7f3d0;
+  color: #065f46;
+}
+
+/* ---------------------------------------------------------------- footer -- */
+
+.footer {
+  background: var(--ink);
+  color: #aab3c9;
+  padding: 3rem 0 2.25rem;
+  font-size: 0.9rem;
+}
+
+.footer a {
+  color: #c7d2fe;
+}
+
+.footer__cols {
+  display: grid;
+  gap: 2.5rem;
+  align-items: start;
+}
+
+@media (min-width: 760px) {
+  .footer__cols {
+    grid-template-columns: 1fr auto;
+    gap: 4rem;
+  }
+}
+
+.footer__heading {
+  color: #fff;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 1rem;
+}
+
+/* `address` italicises by default in every browser, which reads as an aside
+   rather than as the company's real, checkable contact details. */
+.footer__contact {
+  font-style: normal;
+  max-width: 42ch;
+}
+
+.footer__line {
+  display: flex;
+  gap: 0.7rem;
+  align-items: flex-start;
+  margin-bottom: 0.85rem;
+  line-height: 1.55;
+}
+
+.footer__line a {
+  text-decoration: none;
+}
+
+.footer__line a:hover {
+  text-decoration: underline;
+}
+
+.footer__fine {
+  margin-top: 2.5rem;
+  padding-top: 1.75rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 0.82rem;
+}
+
+/* ------------------------------------------------------------- utilities -- */
+
+.center {
+  text-align: center;
+}
+
+.stack-lg {
+  display: grid;
+  gap: 2rem;
+  justify-items: center;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+/*
+ * Motion is additive, never load-bearing.
+ *
+ * The obvious way to write an entrance animation - `opacity: 0` in the base
+ * rule, animate up to 1 - means the content is INVISIBLE to anything that does
+ * not run the animation: reduced-motion users, print, a screenshot, an older
+ * browser. On a page whose entire job is to be read, that trades the content
+ * for the effect.
+ *
+ * So the base state is visible, and the hidden start exists only inside
+ * `no-preference`, where we know motion is wanted and animations run.
+ */
+.reveal {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .reveal {
+    opacity: 0;
+    transform: translateY(18px);
+    animation: reveal 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  }
+}
+
+@keyframes reveal {
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* A stagger, not a queue. Kept short because these fire on load rather than on
+   scroll, so anything below the fold has finished long before it is reached -
+   the delay only ever costs the reader time on the part they can already see. */
+.d1 { animation-delay: 0.04s; }
+.d2 { animation-delay: 0.1s; }
+.d3 { animation-delay: 0.16s; }
+.d4 { animation-delay: 0.22s; }
+.d5 { animation-delay: 0.28s; }
+.d6 { animation-delay: 0.34s; }
+
+.spinner {
+  width: 17px;
+  height: 17px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+.spinner--dark {
+  border-color: rgba(79, 70, 229, 0.25);
+  border-top-color: var(--brand);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
