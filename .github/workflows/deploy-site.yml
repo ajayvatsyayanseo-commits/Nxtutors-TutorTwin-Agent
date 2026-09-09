@@ -106,6 +106,26 @@ jobs:
           $SSH_CMD "$TARGET" bash -lc "'
             cd $DEST
             export PORT=${{ vars.DEPLOY_SITE_PORT }} HOSTNAME=127.0.0.1
+            # CloudPanel installs Node per site through nvm, and nvm loads only
+            # from an interactive shell profile. ssh host bash -lc is not
+            # interactive, so node is absent entirely - which arrived as
+            # nohup: failed to run command node and a 502 from nginx, with
+            # every earlier step reporting success.
+            export NVM_DIR=\"\$HOME/.nvm\"
+            if [ -s \"\$NVM_DIR/nvm.sh\" ]; then
+              . \"\$NVM_DIR/nvm.sh\" >/dev/null 2>&1 || true
+            fi
+            if ! command -v node >/dev/null 2>&1; then
+              # nvm.sh missing or non-functional: take the newest installed node.
+              NODE_BIN=\$(ls -d \"\$NVM_DIR\"/versions/node/*/bin 2>/dev/null | sort -V | tail -1)
+              if [ -n \"\$NODE_BIN\" ]; then export PATH=\"\$NODE_BIN:\$PATH\"; fi
+            fi
+            if ! command -v node >/dev/null 2>&1; then
+              echo \"FATAL: no node for this site user, and none under \$NVM_DIR\"
+              echo \"Set the Node version for this site in CloudPanel.\"
+              exit 1
+            fi
+            echo \"using node \$(node --version) from \$(command -v node)\"
             if command -v pm2 >/dev/null 2>&1; then
               pm2 describe tutortwin-site >/dev/null 2>&1 \
                 && pm2 restart tutortwin-site --update-env \
@@ -113,12 +133,12 @@ jobs:
               pm2 save
             else
               # No PM2: nohup is a stopgap that does NOT survive a reboot.
-              # A PID file, not `pkill -f`. This entire script is the command
-              # line of the bash process running it, so any `pkill -f` pattern
+              # A PID file, not pkill -f. This entire script is the command
+              # line of the bash process running it, so any pkill -f pattern
               # written here matches that process and kills the deploy itself -
               # which arrives back as ssh exit 255 with no output at all. The
               # pattern could not have worked anyway: the process command line
-              # is `node server.js`, with no path in it.
+              # is node server.js, with no path in it.
               [ -f app.pid ] && xargs -r kill < app.pid 2>/dev/null || true
               nohup node server.js > site.log 2>&1 &
               echo \$! > app.pid

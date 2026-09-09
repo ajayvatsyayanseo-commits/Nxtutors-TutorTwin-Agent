@@ -135,7 +135,7 @@ jobs:
             set -euo pipefail
             cd $DEST
 
-            # Exported, not prefixed onto `pm2 start`. `pm2 restart --update-env`
+            # Exported, not prefixed onto pm2 start. pm2 restart --update-env
             # re-reads the CURRENT environment, so a variable that only ever
             # existed on the start command is lost on every restart after the
             # first, and uvicorn falls back to its own default port - where the
@@ -177,12 +177,12 @@ jobs:
                      --name tutortwin-api -- -m tutortwin
               pm2 save
             else
-              # A PID file, not `pkill -f`. This entire script is the command
-              # line of the bash process running it, so any `pkill -f` pattern
+              # A PID file, not pkill -f. This entire script is the command
+              # line of the bash process running it, so any pkill -f pattern
               # written here matches that process and kills the deploy itself -
               # which arrives back as ssh exit 255 with no output at all. The
               # pattern could not have worked anyway: the process command line
-              # is `python -m tutortwin`, with no path in it.
+              # is python -m tutortwin, with no path in it.
               [ -f api.pid ] && xargs -r kill < api.pid 2>/dev/null || true
               nohup ./.venv/bin/python -m tutortwin > api.log 2>&1 &
               echo \$! > api.pid
