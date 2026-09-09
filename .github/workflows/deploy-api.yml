@@ -71,24 +71,33 @@ jobs:
       - name: Test
         env:
           TUTORTWIN_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/tutortwin_test
+          # What `migrations/env.py` reads, via `get_settings().migration_dsn`.
+          TUTORTWIN_DATABASE_MIGRATION_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/tutortwin_test
           TUTORTWIN_DATABASE_POSTGRES_SCHEMA: public
-        run: pytest tests/ -q
+        run: |
+          # `tests/conftest.py` TRUNCATES tables, it never creates them: the
+          # schema is built by the real migrations, so that migration drift
+          # fails the same suite that tests behaviour. Nothing else in CI ran
+          # them, so every integration test errored at setup with
+          # `relation "admin_login_attempts" does not exist`.
+          python -m alembic upgrade head
+          pytest tests/ -q
 
       - name: Authorise SSH
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H \
+          ssh-keyscan -p "${{ vars.DEPLOY_PORT || 22 }}" -H \
             "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          if [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
-            printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          if [ -n "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" ]; then
+            printf '%s\n' "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
             chmod 600 ~/.ssh/deploy_key
-            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
           else
             sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
             echo "SSHPASS=${{ secrets.DEPLOY_API_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "SSH_CMD=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "SSH_CMD=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
           fi
 
       - name: Ship the code
@@ -101,22 +110,24 @@ jobs:
           # credentials, and is not in this repository. A deploy that
           # overwrote it would take the service down with an empty database
           # URL and no obvious cause.
+          # One rsync per source, never several in one command. With
+          # `src/ migrations/ dest/` rsync copies the CONTENTS of both into
+          # dest, so `tutortwin/` and `versions/` land side by side and neither
+          # `src/` nor `migrations/` exists on the server - and rsync exits 0
+          # while doing it, so the `|| fallback` guard that used to be here
+          # never fired. `pip install -e .` and `alembic upgrade` both need the
+          # real layout.
+          #
+          # `.env` and `.venv` live only on the server. They are not excluded
+          # here because nothing below ever descends into the deploy root: the
+          # two --delete transfers are scoped to src/ and migrations/.
           rsync -az --delete -e "$RSYNC_RSH" \
-            --exclude '.env' \
-            --exclude '.venv' \
-            --exclude '__pycache__' \
-            --exclude '*.pyc' \
-            --exclude 'var/' \
-            src/ migrations/ pyproject.toml alembic.ini \
-            "$TARGET:$DEST/" 2>/dev/null || {
-              # rsync cannot take several sources with one --delete safely, so
-              # send them individually.
-              rsync -az --delete -e "$RSYNC_RSH" \
-                --exclude '__pycache__' --exclude '*.pyc' src/ "$TARGET:$DEST/src/"
-              rsync -az --delete -e "$RSYNC_RSH" \
-                --exclude '__pycache__' migrations/ "$TARGET:$DEST/migrations/"
-              rsync -az -e "$RSYNC_RSH" pyproject.toml alembic.ini "$TARGET:$DEST/"
-            }
+            --exclude '__pycache__' --exclude '*.pyc' \
+            src/ "$TARGET:$DEST/src/"
+          rsync -az --delete -e "$RSYNC_RSH" \
+            --exclude '__pycache__' --exclude '*.pyc' \
+            migrations/ "$TARGET:$DEST/migrations/"
+          rsync -az -e "$RSYNC_RSH" pyproject.toml alembic.ini "$TARGET:$DEST/"
 
       - name: Install, migrate, restart
         env:
@@ -127,6 +138,13 @@ jobs:
           $SSH_CMD "$TARGET" bash -lc "'
             set -euo pipefail
             cd $DEST
+
+            # Exported, not prefixed onto `pm2 start`. `pm2 restart --update-env`
+            # re-reads the CURRENT environment, so a variable that only ever
+            # existed on the start command is lost on every restart after the
+            # first, and uvicorn falls back to its own default port - where the
+            # health check below is not listening.
+            export PORT=${{ vars.DEPLOY_API_PORT }} HOST=127.0.0.1
 
             [ -d .venv ] || python3.12 -m venv .venv
             ./.venv/bin/pip install --quiet --upgrade pip
@@ -142,12 +160,12 @@ jobs:
             if command -v pm2 >/dev/null 2>&1; then
               pm2 describe tutortwin-api >/dev/null 2>&1 \
                 && pm2 restart tutortwin-api --update-env \
-                || PORT=8010 HOST=127.0.0.1 pm2 start ./.venv/bin/python \
+                || pm2 start ./.venv/bin/python \
                      --name tutortwin-api -- -m tutortwin
               pm2 save
             else
               pkill -f \"tutortwin-api\" || true
-              PORT=8010 HOST=127.0.0.1 nohup ./.venv/bin/python -m tutortwin \
+              nohup ./.venv/bin/python -m tutortwin \
                 > $DEST/api.log 2>&1 &
             fi
           '"
@@ -184,7 +202,7 @@ jobs:
           # /readyz touches the database. /healthz alone would pass while the
           # service could not reach Postgres at all.
           for i in $(seq 1 12); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://api.nxtutors.com/readyz || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://${{ vars.DEPLOY_API_DOMAIN }}/readyz || true)
             [ "$code" = "200" ] && echo "api is ready" && exit 0
             sleep 5
           done
@@ -196,7 +214,7 @@ jobs:
           # route is mounted and reachable. A 502 or 404 means the deploy broke
           # the one endpoint Meta depends on.
           code=$(curl -s -o /dev/null -w '%{http_code}' \
-            "https://api.nxtutors.com/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x" || true)
+            "https://${{ vars.DEPLOY_API_DOMAIN }}/webhooks/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=x" || true)
           if [ "$code" = "403" ]; then
             echo "webhook is mounted and rejecting correctly"
           else

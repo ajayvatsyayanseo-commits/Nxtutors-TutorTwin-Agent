@@ -34,7 +34,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20.9"
+          node-version: "20.19"
           cache: npm
           cache-dependency-path: apps/admin/package-lock.json
 
@@ -53,20 +53,20 @@ jobs:
       - name: Authorise SSH
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H \
+          ssh-keyscan -p "${{ vars.DEPLOY_PORT || 22 }}" -H \
             "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          if [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
-            printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          if [ -n "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" ]; then
+            printf '%s\n' "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
             chmod 600 ~/.ssh/deploy_key
-            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
           else
             # Password fallback. Works, but every run puts the password in the
             # process table of the runner; move to a key when you can.
             sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
             echo "SSHPASS=${{ secrets.DEPLOY_ADMIN_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "SSH_CMD=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=sshpass -e ssh -p ${{ secrets.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "SSH_CMD=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
+            echo "RSYNC_RSH=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
           fi
 
       - name: Ship the build
@@ -100,8 +100,8 @@ jobs:
           set -euo pipefail
           $SSH_CMD "$TARGET" bash -lc "'
             cd $DEST
-            export PORT=3011 HOSTNAME=127.0.0.1
-            export TUTORTWIN_API_URL=https://api.nxtutors.com
+            export PORT=${{ vars.DEPLOY_ADMIN_PORT }} HOSTNAME=127.0.0.1
+            export TUTORTWIN_API_URL=https://${{ vars.DEPLOY_API_DOMAIN }}
             export TUTORTWIN_ENVIRONMENT=production
             if command -v pm2 >/dev/null 2>&1; then
               pm2 describe tutortwin-admin >/dev/null 2>&1 \
@@ -120,7 +120,7 @@ jobs:
           # A deploy that restarts a process and never checks is a deploy that
           # reports success while the site returns 502.
           for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://tutortwinadmin.nxtutors.com/login || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://${{ vars.DEPLOY_ADMIN_DOMAIN }}/login || true)
             [ "$code" = "200" ] && echo "admin is up" && exit 0
             sleep 6
           done
