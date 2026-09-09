@@ -88,17 +88,13 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ vars.DEPLOY_PORT || 22 }}" -H \
             "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          if [ -n "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" ]; then
-            printf '%s\n' "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-            chmod 600 ~/.ssh/deploy_key
-            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-          else
-            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
-            echo "SSHPASS=${{ secrets.DEPLOY_API_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "SSH_CMD=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-          fi
+          # Password auth, deliberately - there is no key path. The password
+          # reaches ssh through SSHPASS in the environment and never appears on
+          # a command line, so it stays out of the runner's process table.
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          echo "SSHPASS=${{ secrets.DEPLOY_API_SSH_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "SSH_CMD=sshpass -e ssh -p ${{ vars.DEPLOY_PORT }}" >> "$GITHUB_ENV"
+          echo "RSYNC_RSH=sshpass -e ssh -p ${{ vars.DEPLOY_PORT }}" >> "$GITHUB_ENV"
 
       - name: Ship the code
         env:
@@ -145,6 +141,23 @@ jobs:
             # first, and uvicorn falls back to its own default port - where the
             # health check below is not listening.
             export PORT=${{ vars.DEPLOY_API_PORT }} HOST=127.0.0.1
+
+            # Two things this deploy cannot supply, checked before anything
+            # is changed so the failure names itself instead of surfacing as a
+            # migration that cannot find a database.
+            [ -f .env ] || {
+              echo \"FATAL: no .env in this directory on the server.\"
+              echo \"The deploy deliberately never ships one - it holds the\"
+              echo \"production database URL and provider keys. Create it once,\"
+              echo \"by hand, here. Without it alembic has no DSN.\"
+              exit 1
+            }
+            command -v python3.12 >/dev/null 2>&1 || {
+              echo \"FATAL: python3.12 not on PATH. pyproject pins\"
+              echo \"requires-python >=3.12,<3.13, so another python3 cannot\"
+              echo \"install this package. Set the site to Python 3.12.\"
+              exit 1
+            }
 
             [ -d .venv ] || python3.12 -m venv .venv
             ./.venv/bin/pip install --quiet --upgrade pip

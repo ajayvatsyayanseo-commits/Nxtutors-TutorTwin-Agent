@@ -40,7 +40,14 @@ jobs:
 
       - name: Install
         working-directory: apps/site
-        run: npm ci
+        run: |
+          # `npm install`, not `npm ci`. The lockfile resolves differently on
+          # Linux than on the Windows machine it is generated on - npm rejects
+          # it here with a picomatch version it cannot reconcile, while the
+          # same file passes `npm ci` locally. Every dependency in package.json
+          # is pinned to an exact version bar two, so re-resolving costs almost
+          # nothing and removes a whole class of deploy failure.
+          npm install --no-audit --no-fund
 
       - name: Typecheck and lint
         working-directory: apps/site
@@ -51,7 +58,7 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: https://${{ vars.DEPLOY_API_DOMAIN }}
           NEXT_PUBLIC_SITE_URL: https://${{ vars.DEPLOY_SITE_DOMAIN }}
-          NEXT_PUBLIC_CASHFREE_MODE: production
+          NEXT_PUBLIC_CASHFREE_MODE: ${{ vars.NEXT_PUBLIC_CASHFREE_MODE }}
         run: npm run build
 
       - name: Authorise SSH
@@ -59,19 +66,13 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "${{ vars.DEPLOY_PORT || 22 }}" -H \
             "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
-          if [ -n "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" ]; then
-            printf '%s\n' "${{ secrets.TUTORTWIN_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
-            chmod 600 ~/.ssh/deploy_key
-            echo "SSH_CMD=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=ssh -i ~/.ssh/deploy_key -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-          else
-            # Password fallback. Works, but every run puts the password in the
-            # process table of the runner; move to a key when you can.
-            sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
-            echo "SSHPASS=${{ secrets.DEPLOY_SITE_PASSWORD }}" >> "$GITHUB_ENV"
-            echo "SSH_CMD=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-            echo "RSYNC_RSH=sshpass -e ssh -p ${{ vars.DEPLOY_PORT || 22 }}" >> "$GITHUB_ENV"
-          fi
+          # Password auth, deliberately - there is no key path. The password
+          # reaches ssh through SSHPASS in the environment and never appears on
+          # a command line, so it stays out of the runner's process table.
+          sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+          echo "SSHPASS=${{ secrets.DEPLOY_SITE_SSH_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "SSH_CMD=sshpass -e ssh -p ${{ vars.DEPLOY_PORT }}" >> "$GITHUB_ENV"
+          echo "RSYNC_RSH=sshpass -e ssh -p ${{ vars.DEPLOY_PORT }}" >> "$GITHUB_ENV"
 
       - name: Ship the build
         env:
