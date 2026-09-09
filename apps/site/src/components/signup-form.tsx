@@ -40,17 +40,33 @@ export function SignupForm() {
   // who actually reach the form, and so a CDN outage degrades to a clear
   // message instead of a checkout button that silently does nothing.
   useEffect(() => {
+    let cancelled = false;
+    const markReady = () => {
+      if (!cancelled) setSdkReady(true);
+    };
+
     if (window.Cashfree) {
-      setSdkReady(true);
-      return;
+      // Already on the page - a remount, or a second form. Deferred to a
+      // microtask rather than set here: a setState in the effect body forces a
+      // second render pass before the browser paints, which is what
+      // react-hooks/set-state-in-effect exists to catch.
+      queueMicrotask(markReady);
+      return () => {
+        cancelled = true;
+      };
     }
+
     const script = document.createElement("script");
     script.src = SDK_SRC;
     script.async = true;
-    script.onload = () => setSdkReady(true);
+    script.onload = markReady;
     script.onerror = () =>
       setError("The payment library could not load. Check your connection and refresh.");
     document.body.appendChild(script);
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {

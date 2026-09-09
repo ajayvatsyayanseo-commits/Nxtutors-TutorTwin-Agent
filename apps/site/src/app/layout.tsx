@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Link from "next/link";
 
 import "./globals.css";
 
@@ -48,15 +49,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <header className="masthead">
           <div className="shell masthead__inner">
-            <a className="wordmark" href="/">
+            <Link className="wordmark" href="/">
               <span className="logo-mark wordmark__dot" aria-hidden="true">
                 <img src="/logo.png" alt="" />
               </span>
               TutorTwin
-            </a>
-            <a className="btn" href="/payment">
+            </Link>
+            <Link className="btn" href="/payment">
               Get started
-            </a>
+            </Link>
           </div>
         </header>
 
@@ -75,9 +76,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <br />
               Your day-to-day study buddy on WhatsApp.
               <p style={{ marginTop: "1rem" }}>
-                <a className="btn" href="/payment">
+                <Link className="btn" href="/payment">
                   Get subscription
-                </a>
+                </Link>
               </p>
             </div>
 
