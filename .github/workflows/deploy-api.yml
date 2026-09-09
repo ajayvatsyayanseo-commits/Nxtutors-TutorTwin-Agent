@@ -147,6 +147,10 @@ jobs:
             # migration that cannot find a database.
             [ -f .env ] || {
               echo \"FATAL: no .env in this directory on the server.\"
+              echo \"  cwd:  \$(pwd)\"
+              echo \"  home: \$HOME\"
+              echo \"  what is actually here:\"
+              ls -la | head -20
               echo \"The deploy deliberately never ships one - it holds the\"
               echo \"production database URL and provider keys. Create it once,\"
               echo \"by hand, here. Without it alembic has no DSN.\"
