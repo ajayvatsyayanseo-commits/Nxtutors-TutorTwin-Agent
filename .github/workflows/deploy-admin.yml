@@ -111,8 +111,15 @@ jobs:
               pm2 save
             else
               # No PM2: nohup is a stopgap that does NOT survive a reboot.
-              pkill -f \"$DEST/server.js\" || true
-              nohup node server.js > $DEST/admin.log 2>&1 &
+              # A PID file, not `pkill -f`. This entire script is the command
+              # line of the bash process running it, so any `pkill -f` pattern
+              # written here matches that process and kills the deploy itself -
+              # which arrives back as ssh exit 255 with no output at all. The
+              # pattern could not have worked anyway: the process command line
+              # is `node server.js`, with no path in it.
+              [ -f app.pid ] && xargs -r kill < app.pid 2>/dev/null || true
+              nohup node server.js > admin.log 2>&1 &
+              echo \$! > app.pid
             fi
           '"
 
