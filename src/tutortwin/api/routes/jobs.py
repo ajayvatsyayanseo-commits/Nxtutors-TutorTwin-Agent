@@ -50,8 +50,10 @@ from tutortwin.domain.events import (
 )
 from tutortwin.domain.models import ResolvedSubject, SubjectStatus
 from tutortwin.domain.provider import ModelAlias
+from tutortwin.media.pipeline import ProcessOutcome
 from tutortwin.observability.logging import get_logger
 from tutortwin.policies import retry_policy
+from tutortwin.repositories import catalog as catalog_repo
 from tutortwin.repositories import media as media_repo
 from tutortwin.services import retention
 
@@ -159,8 +161,12 @@ async def run_job(
             job_id=payload.job_id, state="RUNNING", detail="media pipeline not configured"
         )
 
-    # The pipeline opens and commits its own transactions around the fetch and
-    # extraction, so no transaction is held across the network or OCR work.
+    # `process` commits the read transaction before downloading and uploading,
+    # so no transaction spans those. The extraction call after it does still run
+    # inside one.
+    # ponytail: extraction holds a transaction for the length of one vision
+    # call; split it once media concurrency exceeds the pool, which needs
+    # resumable EXTRACTING state rather than the forward-only machine we have.
     try:
         async with session_scope() as session:
             media = (
@@ -180,6 +186,25 @@ async def run_job(
                 decision=await _media_budget(container, media),
                 gateway=container.build_gateway(),
             )
+            # Media spend, on the same ledger as tutoring spend.
+            #
+            # Vision and transcription calls were the only paid provider calls
+            # in the system that wrote no `usage_ledger` row. The consequence is
+            # not a missing report: `load_quota_snapshot` reads that table, so
+            # every per-student and system budget ceiling was blind to them, and
+            # a student sending photos all day was billed as if they had sent
+            # nothing.
+            for call in outcome.calls:
+                await catalog_repo.record_model_call(
+                    session,
+                    call=call,
+                    subject_id=media.subject_id,
+                    # No request event: the job runs long after the request that
+                    # queued it, and the column is nullable for exactly this.
+                    request_event_id=None,
+                    capability=f"MEDIA_{media.kind or 'UNKNOWN'}",
+                )
+
             done = await media_repo.load_job(session, payload.job_id)
             if done is not None:
                 await media_repo.mark_job(session, done, state="SUCCEEDED")
@@ -228,8 +253,81 @@ async def run_job(
     # the answer shortly". Until this call existed, nothing ever did: the text was
     # extracted, written to `media_extractions`, and the conversation stopped.
     # A promise made in the request path has to be kept in the job path.
-    await _answer_from_media(container, media_object_id)
+    if outcome.enhanced_note is not None:
+        # They asked for a clearer picture, so a picture is the answer. Routing
+        # this through the tutor instead would reply to a question nobody asked.
+        await _send_enhanced_image(container, media_object_id, outcome)
+    else:
+        await _answer_from_media(container, media_object_id)
     return JobResponse(job_id=payload.job_id, state="SUCCEEDED", detail=outcome.state.value)
+
+
+async def _send_enhanced_image(
+    container: Container, media_object_id: UUID, outcome: ProcessOutcome
+) -> None:
+    """Send the cleaned-up photo back.
+
+    The note goes through the ordinary outbound gateway so it reaches whatever
+    channel the student is on; the image itself goes as raw bytes through the
+    WhatsApp client, the same way typeset maths does, because Meta fetching a
+    link would require the blob store to be publicly reachable and it is not.
+
+    Never raises, for the same reason `_answer_from_media` does not: the work is
+    done and stored, and failing here would re-run the whole job to fix a
+    delivery problem.
+    """
+    try:
+        async with session_scope() as session:
+            media = (
+                await session.execute(select(MediaObject).where(MediaObject.id == media_object_id))
+            ).scalar_one_or_none()
+            if media is None:
+                return
+            subject_row = (
+                await session.execute(select(Subject).where(Subject.id == media.subject_id))
+            ).scalar_one_or_none()
+            if subject_row is None:
+                return
+            subject = ResolvedSubject(
+                id=subject_row.id,
+                external_type=subject_row.external_identity_type,
+                external_id=subject_row.external_identity_value,
+                display_name=subject_row.display_name,
+                status=SubjectStatus.ACTIVE,
+            )
+
+        # One message, not two: the explanation rides as the image's caption so
+        # the student sees what changed next to the picture that changed.
+        if (
+            outcome.enhanced_png is not None
+            and container.whatsapp is not None
+            and subject.external_type == "whatsapp"
+        ):
+            sent = await container.whatsapp.send_media(
+                subject.external_id,
+                data=outcome.enhanced_png,
+                mime_type="image/png",
+                filename="cleaned.png",
+                kind="image",
+                caption=outcome.enhanced_note,
+            )
+            if sent is not None:
+                return
+            logger.info("enhanced_image_upload_failed", media_id=str(media_object_id))
+
+        # Either there was no picture worth sending back, the channel cannot
+        # carry one, or the upload failed. The note still goes out - it is the
+        # honest answer on its own, and silence is the one outcome to avoid.
+        await container.outbound.deliver(
+            subject,
+            (OutboundAction(type=OutboundActionType.SEND_TEXT, text=outcome.enhanced_note),),
+        )
+    except Exception as exc:
+        logger.warning(
+            "enhanced_image_delivery_failed",
+            media_id=str(media_object_id),
+            error_type=type(exc).__name__,
+        )
 
 
 async def _answer_from_media(container: Container, media_object_id: UUID) -> None:

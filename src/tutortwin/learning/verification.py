@@ -24,6 +24,8 @@ Both were verified against real escape attempts before this module was written.
 
 from __future__ import annotations
 
+import ast
+import operator
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -58,9 +60,15 @@ MAX_EXPONENT = 1000
 """2**1000 is a 302-digit number computed in under a millisecond; beyond this the
 result stops being arithmetic a student could have meant."""
 
+MAX_FACTORIAL = 1000
+"""1000! is 2568 digits and computes in about a millisecond. `factorial` is in
+the whitelist for permutations and combinations, and school-level ones are far
+below this - but SymPy evaluates the factorial while PARSING, so an unbounded
+argument is a denial of service that never reaches the solver at all. Measured:
+`factorial(999999)` spends ten seconds of CPU before returning."""
+
 _EXPONENT_OP = re.compile(r"\*\*|\^")
 _CHAINED_EXPONENT = re.compile(r"(?:\*\*|\^)\s*[\w.()]*?\s*(?:\*\*|\^)")
-_NUMERIC_EXPONENT = re.compile(r"(?:\*\*|\^)\s*\(?\s*(\d+)")
 
 # Layer 2: the only names that resolve during parsing. `Symbol` is required for
 # `auto_symbol` to turn an undefined name into a symbol rather than a NameError.
@@ -103,9 +111,137 @@ def assert_parseable(text: str) -> None:
     # computation.
     if _CHAINED_EXPONENT.search(text):
         raise UnsafeExpression("chained_exponent")
-    for literal in _NUMERIC_EXPONENT.findall(text):
-        if int(literal) > MAX_EXPONENT:
+
+    # Every exponent that is a NUMBER, however it is spelled.
+    #
+    # This used to read a bare literal off the raw string, so it saw the 500 in
+    # `2**(500*500)` and let a 250000-power through: measured, that expression
+    # parses in 8.2 seconds and peaks at 465 MB, because SymPy computes it while
+    # parsing. Writing the exponent as a product was the entire bypass.
+    #
+    # An exponent containing a symbol needs no bound - `x**(a*b)` stays a
+    # symbolic Pow and computes nothing - so only fully numeric ones are folded,
+    # and the folding itself refuses to exponentiate.
+    for fragment in _exponent_operands(text):
+        value = _fold_number(fragment)
+        if value is not None and abs(value) > MAX_EXPONENT:
             raise UnsafeExpression("exponent_too_large")
+
+    # Same argument for factorial, which also evaluates during parsing. Here an
+    # unfoldable argument is rejected rather than allowed: `factorial(x)` is not
+    # school-level notation, and permitting it would reopen the hole for
+    # anything the folder cannot read.
+    for fragment in _call_arguments(text, "factorial"):
+        value = _fold_number(fragment)
+        if value is None or abs(value) > MAX_FACTORIAL:
+            raise UnsafeExpression("factorial_argument_unbounded")
+
+
+def _balanced(text: str, start: int) -> tuple[str, int] | None:
+    """The parenthesised group beginning at `start`, and the index just after it."""
+    if start >= len(text) or text[start] != "(":
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "(":
+            depth += 1
+        elif text[index] == ")":
+            depth -= 1
+            if depth == 0:
+                return text[start + 1 : index], index + 1
+    return None  # Unbalanced. The parser rejects it a moment later.
+
+
+def _exponent_operands(text: str) -> list[str]:
+    """The right-hand side of every `**` and `^`, as written.
+
+    Textual rather than parsed, because the whole point is to decide BEFORE
+    parsing: SymPy does the arithmetic during `parse_expr`, so a check that
+    waits for a tree has already paid the cost it exists to prevent.
+    """
+    operands: list[str] = []
+    for match in _EXPONENT_OP.finditer(text):
+        index = match.end()
+        while index < len(text) and text[index].isspace():
+            index += 1
+        sign = ""
+        while index < len(text) and text[index] in "+-":
+            sign += text[index]
+            index += 1
+            while index < len(text) and text[index].isspace():
+                index += 1
+        group = _balanced(text, index)
+        if group is not None:
+            operands.append(sign + "(" + group[0] + ")")
+            continue
+        end = index
+        while end < len(text) and (text[end].isalnum() or text[end] in "._"):
+            end += 1
+        if end > index:
+            operands.append(sign + text[index:end])
+    return operands
+
+
+def _call_arguments(text: str, name: str) -> list[str]:
+    """Every argument written to `name(...)`, as text."""
+    arguments: list[str] = []
+    for match in re.finditer(rf"\b{re.escape(name)}\s*", text):
+        group = _balanced(text, match.end())
+        if group is not None:
+            arguments.append(group[0])
+    return arguments
+
+
+_FOLD_OPS: dict[type[ast.operator], Any] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+}
+
+
+def _fold_number(fragment: str) -> float | None:
+    """The value of a fragment that is pure arithmetic on numbers, else None.
+
+    None means "contains a symbol", which needs no bound: a `Pow` with a free
+    symbol in its exponent stays symbolic and computes nothing.
+
+    Deliberately refuses to fold `**`. Folding an exponent would reproduce the
+    bomb inside the check meant to catch it, and chained exponents are rejected
+    outright a few lines above.
+    """
+    try:
+        tree = ast.parse(fragment.strip(), mode="eval")
+    except SyntaxError:
+        return None
+
+    def walk(node: ast.expr) -> float | None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, int | float):
+            return float(node.value)
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.UAdd | ast.USub):
+            inner = walk(node.operand)
+            if inner is None:
+                return None
+            return inner if isinstance(node.op, ast.UAdd) else -inner
+        if isinstance(node, ast.BinOp):
+            handler = _FOLD_OPS.get(type(node.op))
+            if handler is None:
+                return None
+            left, right = walk(node.left), walk(node.right)
+            if left is None or right is None:
+                return None
+            # Stop the moment either side passes the ceiling rather than
+            # carrying the value on: the caller only asks whether the bound was
+            # exceeded, and a runaway intermediate is the thing being prevented.
+            if abs(left) > MAX_EXPONENT or abs(right) > MAX_EXPONENT:
+                return float(MAX_EXPONENT) + 1.0
+            try:
+                return float(handler(left, right))
+            except (ZeroDivisionError, OverflowError, ValueError):
+                return None
+        return None
+
+    return walk(tree.body)
 
 
 def safe_parse(text: str) -> sympy.Expr:

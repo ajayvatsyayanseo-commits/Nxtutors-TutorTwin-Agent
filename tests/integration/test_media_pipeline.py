@@ -134,6 +134,30 @@ def wav_bytes(seconds: int = 2) -> bytes:
     return header + data
 
 
+def blurred_page() -> bytes:
+    """A photograph of a page that is soft but recoverable.
+
+    Radius 2 is chosen deliberately: it scores 5.7 on the focus measure, which
+    the original code called hopeless, and enhances to a copy Tesseract reads
+    at 4/4 words. It is the exact case the thresholds used to get wrong.
+    """
+    from PIL import ImageDraw, ImageFilter, ImageFont
+
+    img = Image.new("RGB", (1200, 900), "white")
+    draw = ImageDraw.Draw(img)
+    # A real size, from Pillow's bundled face: the default bitmap font is ~11px
+    # and a radius-2 blur erases it, which would make this test assert the
+    # opposite of what it means to.
+    font = ImageFont.load_default(size=48)
+    y = 90
+    for line in ("Question 4.", "Solve for x:", "2x + 5 = 13"):
+        draw.text((90, y), line, fill=(10, 10, 10), font=font)
+        y += 90
+    buf = io.BytesIO()
+    img.filter(ImageFilter.GaussianBlur(radius=2.0)).save(buf, "PNG")
+    return buf.getvalue()
+
+
 @pytest.fixture
 def blobroot():
     with tempfile.TemporaryDirectory() as directory:
@@ -808,3 +832,78 @@ async def test_voice_is_exempt_from_the_brief_gate(session: AsyncSession, blobro
     assert outcome.needs_brief is False
     assert outcome.job_created is True
     assert queue.depth == 1
+
+
+async def test_asking_for_a_clearer_photo_returns_a_photo_and_spends_nothing(
+    session: AsyncSession, blobroot
+) -> None:
+    """ "Make this clearer" is answered with a picture, not with the tutor.
+
+    Two things are asserted together because they are the same decision: the
+    student gets the cleaned-up image back, and nothing is billed for reading a
+    page they never asked a question about. `enhance` was a complete module with
+    no caller at all until this path existed - the feature simply did not run.
+    """
+    subject = await make_subject(session)
+    pipeline, _, _, ocr = build_pipeline(blobroot, files={"media_1": blurred_page()})
+    gateway, vision = vision_gateway()
+
+    intake = await pipeline.intake(
+        session,
+        subject_id=subject.id,
+        conversation_id=None,
+        ref=ref(),
+        message_type=MessageType.IMAGE,
+        brief="this is blurry, can you make it clearer",
+        entitled=True,
+    )
+    result = await pipeline.process(session, intake.media, decision=ALLOW, gateway=gateway)
+    await session.commit()
+
+    assert result.enhanced_png is not None
+    assert result.enhanced_note
+    assert result.state is MediaState.READY_FOR_CAPABILITY
+
+    # Nothing read, nothing billed, nothing cached: the student asked for a
+    # picture, so no page was extracted to answer a question with.
+    assert ocr.pages_read == 0
+    assert vision.call_count == 0
+    assert result.calls == []
+    assert result.extraction is None
+    stored = await session.scalar(
+        select(func.count())
+        .select_from(MediaExtraction)
+        .where(MediaExtraction.subject_id == subject.id)
+    )
+    assert stored == 0
+
+
+async def test_a_blurry_photo_with_a_question_still_gets_answered(
+    session: AsyncSession, blobroot
+) -> None:
+    """The failure that matters most in the other direction.
+
+    "Solve this, the photo is blurry" mentions the blur but asks for an answer.
+    Routing it to the enhancer would send a student who wanted help a photograph
+    of their own homework.
+    """
+    subject = await make_subject(session)
+    pipeline, _, _, ocr = build_pipeline(blobroot, files={"media_1": blurred_page()})
+    gateway, _ = vision_gateway()
+
+    intake = await pipeline.intake(
+        session,
+        subject_id=subject.id,
+        conversation_id=None,
+        ref=ref(),
+        message_type=MessageType.IMAGE,
+        brief="solve this, the photo is a bit blurry",
+        entitled=True,
+    )
+    result = await pipeline.process(session, intake.media, decision=ALLOW, gateway=gateway)
+    await session.commit()
+
+    assert result.enhanced_png is None
+    assert result.enhanced_note is None
+    assert result.extraction is not None
+    assert ocr.pages_read == 1

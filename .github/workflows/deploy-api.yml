@@ -152,6 +152,33 @@ jobs:
             fi
           '"
 
+      - name: Bootstrap the administrator
+        env:
+          TARGET: ${{ secrets.DEPLOY_API_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_API_PATH }}
+          ADMIN_EMAIL: ${{ secrets.TUTORTWIN_ADMIN_BOOTSTRAP_EMAIL }}
+          ADMIN_HASH: ${{ secrets.TUTORTWIN_ADMIN_BOOTSTRAP_PASSWORD_HASH }}
+        run: |
+          set -euo pipefail
+          # Without an administrator row the login page has nothing to accept:
+          # the panel deploys green and still cannot be opened by anyone.
+          #
+          # Piped into `bash -s` rather than inlined into `bash -lc`, because the
+          # Argon2id hash is full of `$`. The single quotes below are on the
+          # REMOTE side of the pipe, which is what stops the server's shell
+          # expanding `$argon2id$v=19$...` into nothing.
+          #
+          # `|| true` because bootstrap exits 2 once an administrator exists, and
+          # that is the expected result of every deploy after the first. Creating
+          # the account is a one-time event; refusing to do it twice is the
+          # safety property, not an error.
+          printf '%s\n' \
+            "cd $DEST" \
+            "export TUTORTWIN_ADMIN_BOOTSTRAP_EMAIL='$ADMIN_EMAIL'" \
+            "export TUTORTWIN_ADMIN_BOOTSTRAP_PASSWORD_HASH='$ADMIN_HASH'" \
+            './.venv/bin/python -m tutortwin.cli.admin bootstrap || true' \
+            | $SSH_CMD "$TARGET" bash -s
+
       - name: Verify the service is healthy
         run: |
           # /readyz touches the database. /healthz alone would pass while the

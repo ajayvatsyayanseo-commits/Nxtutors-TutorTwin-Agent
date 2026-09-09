@@ -125,6 +125,59 @@ def test_exponent_bombs_are_rejected(payload: str) -> None:
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        # The bypass this covers: the guard read a bare literal off the raw
+        # string, so it saw "500" and let a 250000-power through. Measured
+        # before the fix, this expression parsed in 8.2 seconds and peaked at
+        # 465 MB - from one WhatsApp message.
+        "2**(500*500)",
+        "2**(999*999*999)",
+        "2^(1000*1000*1000)",
+        "x**(2000-100)",
+        "2**(1001)",
+        "2**(-5000)",
+    ],
+)
+def test_an_exponent_written_as_arithmetic_is_still_bounded(payload: str) -> None:
+    with pytest.raises(UnsafeExpression) as excinfo:
+        safe_parse(payload)
+    assert excinfo.value.reason == "exponent_too_large"
+
+
+@pytest.mark.parametrize("payload", ["factorial(999999)", "factorial(50*50)", "factorial(n)"])
+def test_factorial_arguments_are_bounded(payload: str) -> None:
+    """SymPy computes the factorial while parsing.
+
+    `factorial(999999)` spends ten seconds of CPU before any expression exists
+    to reject, so the bound has to be applied to the raw text. A symbolic
+    argument is refused too: it is not school notation, and allowing it would
+    reopen the hole for anything the folder cannot read.
+    """
+    with pytest.raises(UnsafeExpression) as excinfo:
+        safe_parse(payload)
+    assert excinfo.value.reason == "factorial_argument_unbounded"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        # A symbol anywhere in the exponent means SymPy keeps the Pow symbolic
+        # and computes nothing, so these need no bound and must not be refused.
+        "x^(n+1)",
+        "x^(2*n)",
+        "e^(-x)",
+        "x**(1/2)",
+        "2**-500",
+        "factorial(6)",
+        "factorial(10) / factorial(4)",
+    ],
+)
+def test_the_bound_does_not_refuse_ordinary_notation(expression: str) -> None:
+    assert safe_parse(expression) is not None
+
+
+@pytest.mark.parametrize(
     "expression",
     [
         "2*x + 5",

@@ -9,6 +9,7 @@ anything about tutoring, and orchestration knows nothing about Meta.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,6 +28,15 @@ GRAPH_HOST = "https://graph.facebook.com"
 # multi-part problem passes that easily, so long answers are split rather than
 # truncated - a maths answer cut mid-derivation is worse than two messages.
 TEXT_LIMIT = 4096
+
+SEND_ATTEMPTS = 3
+"""Total attempts for a transient failure. Three is chosen against Meta's own
+behaviour: a 429 clears in seconds and a 502 is usually one bad edge node, while
+a fourth attempt mostly adds latency to a request the student is waiting on."""
+
+SEND_BACKOFF_SECONDS = 0.75
+"""Multiplied by the attempt number, so 0.75s then 1.5s. Short on purpose - this
+runs while a student watches WhatsApp, not in a background job."""
 
 # Documents and images are sent by link, and Meta fetches the link itself. Only
 # these actions carry one; everything else is prose.
@@ -94,12 +104,22 @@ class WhatsAppClient:
             self._client = None
 
     async def send(self, to: str, payload: dict[str, Any]) -> str | None:
-        """POST one message. Returns Meta's message id, or None if disabled.
+        """POST one message, retrying what is worth retrying.
 
-        Failures are logged and swallowed. A student's answer is already
-        persisted by the time this runs, so raising here would fail a request
-        that has succeeded, and Cloud Tasks would retry the whole turn - paying
+        **Failures are never raised.** The student's answer is already persisted
+        and already billed by the time this runs, so raising would fail a
+        request that succeeded and make the queue retry the whole turn - paying
         a second time for a model call whose answer we already hold.
+
+        But swallowing on the first attempt loses that answer permanently: the
+        idempotency key is settled, so Meta's own redelivery replays the stored
+        response without re-delivering it. A transient 429 or 502 therefore costs
+        the student the reply they paid for.
+
+        So transient failures are retried here, and only transient ones. A 400
+        is Meta saying the 24-hour window is closed or the token is expired -
+        conditions that do not change in two seconds, and retrying them just
+        delays the log line that explains the problem.
         """
         if not self.send_enabled:
             logger.info("whatsapp_send_disabled", to_suffix=to[-4:], kind=payload.get("type"))
@@ -112,27 +132,51 @@ class WhatsAppClient:
             "to": to,
             **payload,
         }
-        try:
-            response = await self._http().post(url, headers=self._headers, json=body)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "whatsapp_send_failed",
-                status=exc.response.status_code,
-                # Meta puts the actionable part in the body: an expired token
-                # and an unopened 24-hour window are both 400.
-                detail=exc.response.text[:500],
-                kind=payload.get("type"),
-            )
-            return None
-        except httpx.HTTPError as exc:
-            logger.error("whatsapp_send_error", error_type=type(exc).__name__)
-            return None
 
-        messages = response.json().get("messages") or [{}]
-        message_id = messages[0].get("id")
-        logger.info("whatsapp_sent", kind=payload.get("type"), message_id=message_id)
-        return str(message_id) if message_id else None
+        last_status: int | None = None
+        for attempt in range(1, SEND_ATTEMPTS + 1):
+            try:
+                response = await self._http().post(url, headers=self._headers, json=body)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                last_status = exc.response.status_code
+                retryable = last_status == 429 or last_status >= 500
+                logger.error(
+                    "whatsapp_send_failed",
+                    status=last_status,
+                    attempt=attempt,
+                    retryable=retryable,
+                    # Meta puts the actionable part in the body: an expired
+                    # token and an unopened 24-hour window are both 400.
+                    detail=exc.response.text[:500],
+                    kind=payload.get("type"),
+                )
+                if not retryable or attempt == SEND_ATTEMPTS:
+                    return None
+            except httpx.HTTPError as exc:
+                # A timeout or connection reset. Always worth another try - the
+                # message may not even have reached Meta.
+                logger.error(
+                    "whatsapp_send_error",
+                    error_type=type(exc).__name__,
+                    attempt=attempt,
+                )
+                if attempt == SEND_ATTEMPTS:
+                    return None
+            else:
+                messages = response.json().get("messages") or [{}]
+                message_id = messages[0].get("id")
+                logger.info(
+                    "whatsapp_sent",
+                    kind=payload.get("type"),
+                    message_id=message_id,
+                    attempt=attempt,
+                )
+                return str(message_id) if message_id else None
+
+            await asyncio.sleep(SEND_BACKOFF_SECONDS * attempt)
+
+        return None
 
     async def send_text(self, to: str, text: str) -> None:
         for part in _chunk(text):

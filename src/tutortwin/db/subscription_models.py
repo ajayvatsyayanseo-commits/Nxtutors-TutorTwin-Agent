@@ -118,9 +118,7 @@ class Payment(Base):
     """CREATED -> PAID | FAILED | EXPIRED. Only PAID grants anything."""
 
     payment_session_id: Mapped[str | None] = mapped_column(Text)
-    gateway_payload: Mapped[dict[str, object]] = mapped_column(
-        JSONB, nullable=False, default=dict
-    )
+    gateway_payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False, default=dict)
 
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     """Set exactly once, when the entitlement is written. Its presence is what

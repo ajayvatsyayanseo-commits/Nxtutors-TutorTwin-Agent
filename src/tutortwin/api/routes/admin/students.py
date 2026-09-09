@@ -64,22 +64,6 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 
-_CONTROL_CHARS = frozenset(chr(code) for code in range(32)) | {chr(127)}
-
-
-def like_pattern(term: str) -> str:
-    """Escape LIKE wildcards so a search term matches itself and nothing else.
-
-    Control characters are stripped first. A NUL byte is not merely useless in a
-    search - PostgreSQL text cannot hold one, so passing it through turns a
-    hostile query parameter into a driver error and a 500. Measured: without this
-    line, `?q=%00truncated` crashed the endpoint.
-    """
-    cleaned = "".join(ch for ch in term if ch not in _CONTROL_CHARS)
-    escaped = cleaned.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
 class StudentSummary(BaseModel):
     id: str
     external_identity_type: str
@@ -124,7 +108,7 @@ async def list_students(
     )
 
     if q:
-        pattern = like_pattern(q.strip())
+        pattern = admin_repo.like_pattern(q.strip())
         base = base.where(
             or_(
                 Subject.external_identity_value.ilike(pattern, escape="\\"),
@@ -844,7 +828,9 @@ async def list_documents(
         Subject, Subject.id == KnowledgeSource.subject_id
     )
     if q:
-        base = base.where(KnowledgeSource.title.ilike(like_pattern(q.strip()), escape="\\"))
+        base = base.where(
+            KnowledgeSource.title.ilike(admin_repo.like_pattern(q.strip()), escape="\\")
+        )
     if visibility:
         base = base.where(KnowledgeSource.visibility == visibility)
     if status:
@@ -1207,7 +1193,7 @@ async def assessment_detail(
     }
 
 
-__all__ = ["like_pattern", "router"]
+__all__ = ["router"]
 
 
 class GrantSubscriptionRequest(HighRiskRequest):

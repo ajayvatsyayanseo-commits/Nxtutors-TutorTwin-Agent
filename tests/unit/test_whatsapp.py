@@ -18,6 +18,7 @@ import pytest
 from tutortwin.domain.events import MessageType, OutboundAction, OutboundActionType
 from tutortwin.domain.models import ResolvedSubject, SubjectStatus
 from tutortwin.integrations.whatsapp.client import (
+    SEND_ATTEMPTS,
     RoutingMediaSource,
     WhatsAppClient,
     WhatsAppMediaSource,
@@ -652,3 +653,105 @@ class TestMathImages:
         )
 
         assert stub.sent and stub.media == []
+
+
+class TestSendRetry:
+    """A transient failure must not cost the student their answer.
+
+    The answer is persisted and the idempotency key is settled before the send
+    runs, so Meta's own redelivery replays the stored response WITHOUT
+    re-delivering it. One swallowed 429 is therefore a permanent loss of a reply
+    the student paid for.
+    """
+
+    @pytest.mark.asyncio
+    async def test_a_rate_limit_is_retried_and_succeeds(self) -> None:
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return httpx.Response(429, json={"error": {"message": "rate limited"}})
+            return httpx.Response(200, json={"messages": [{"id": "wamid.ok"}]})
+
+        client = WhatsAppClient(access_token="T", phone_number_id="P")
+        client._client = _transport(handler)
+        result = await client.send("919999000001", {"type": "text"})
+
+        assert result == "wamid.ok"
+        assert calls["n"] == 2, "the 429 was not retried"
+
+    @pytest.mark.asyncio
+    async def test_a_server_error_is_retried(self) -> None:
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                return httpx.Response(502, text="bad gateway")
+            return httpx.Response(200, json={"messages": [{"id": "wamid.late"}]})
+
+        client = WhatsAppClient(access_token="T", phone_number_id="P")
+        client._client = _transport(handler)
+
+        assert await client.send("919999000001", {"type": "text"}) == "wamid.late"
+        assert calls["n"] == 3
+
+    @pytest.mark.asyncio
+    async def test_a_closed_window_is_not_retried(self) -> None:
+        """A 400 means the 24-hour window is shut or the token expired. Neither
+        changes in two seconds, so retrying only delays the log line that
+        explains the problem."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(400, json={"error": {"message": "24h window closed"}})
+
+        client = WhatsAppClient(access_token="T", phone_number_id="P")
+        client._client = _transport(handler)
+
+        assert await client.send("919999000001", {"type": "text"}) is None
+        assert calls["n"] == 1, "a permanent failure must not be retried"
+
+    @pytest.mark.asyncio
+    async def test_attempts_are_bounded(self) -> None:
+        """A student is waiting. Retrying forever is worse than failing."""
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            return httpx.Response(503, text="unavailable")
+
+        client = WhatsAppClient(access_token="T", phone_number_id="P")
+        client._client = _transport(handler)
+
+        assert await client.send("919999000001", {"type": "text"}) is None
+        assert calls["n"] == SEND_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_a_network_error_is_retried_then_gives_up(self) -> None:
+        calls = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls["n"] += 1
+            raise httpx.ConnectTimeout("no route")
+
+        client = WhatsAppClient(access_token="T", phone_number_id="P")
+        client._client = _transport(handler)
+
+        assert await client.send("919999000001", {"type": "text"}) is None
+        assert calls["n"] == SEND_ATTEMPTS
+
+    @pytest.mark.asyncio
+    async def test_a_failure_never_raises(self) -> None:
+        """Raising would fail a request that already succeeded and make the
+        queue retry the whole turn - paying twice for one answer."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            raise httpx.ReadError("connection reset")
+
+        client = WhatsAppClient(access_token="T", phone_number_id="P")
+        client._client = _transport(handler)
+
+        assert await client.send("91999", {"type": "text"}) is None

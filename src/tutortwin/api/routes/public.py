@@ -266,9 +266,7 @@ async def _activate(container: Container, order_id: str, payload: dict[str, Any]
     return True
 
 
-async def notify_activation(
-    container: Container, result: subscriptions.ActivationResult
-) -> None:
+async def notify_activation(container: Container, result: subscriptions.ActivationResult) -> None:
     """Tell the student on WhatsApp that they are live.
 
     Sent as a **template**, because a confirmation almost always falls outside

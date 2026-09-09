@@ -35,6 +35,7 @@ from tutortwin.domain.media import (
     RejectReason,
 )
 from tutortwin.domain.provider import ModelCall
+from tutortwin.media import enhance
 from tutortwin.media.adapters import MediaNotFound, MediaSource, TaskQueue
 from tutortwin.media.audio import TranscriptionProvider, VoicePipeline
 from tutortwin.media.blobstore import DEFAULT_RETENTION_DAYS, BlobStore
@@ -76,6 +77,24 @@ def has_brief(text: str | None) -> bool:
     return len((text or "").strip()) >= MIN_BRIEF_CHARS
 
 
+_KIND_FOR_MESSAGE_TYPE: dict[MessageType, MediaKind] = {
+    MessageType.IMAGE: MediaKind.IMAGE,
+    MessageType.PDF: MediaKind.PDF,
+    MessageType.AUDIO: MediaKind.AUDIO,
+    MessageType.DOCUMENT: MediaKind.DOCUMENT,
+}
+"""What the SENDER said it is, recorded at intake.
+
+`record_fetched` overwrites this with what the bytes actually are, which is the
+authoritative answer - but that happens after the download, and a file parked in
+WAITING_FOR_BRIEF has not been downloaded. Leaving it NULL until then meant a
+resumed brief looked up its own media type and found nothing, defaulted to
+DOCUMENT, and `_projected_units` returned an empty dict - so the student's daily
+OCR ceiling was not checked on that path at all. Answering the brief prompt was
+a way to bypass the media budget entirely.
+"""
+
+
 def _projected_units(message_type: MessageType) -> dict[str, int]:
     """What one more of this media type would consume.
 
@@ -114,6 +133,16 @@ class ProcessOutcome:
     vision_pages: int = 0
     cache_hits: int = 0
     fetched: bool = False
+
+    enhanced_png: bytes | None = None
+    """Set when the student asked for a cleaner photo rather than an answer.
+
+    Its presence is what tells the job to send a picture back instead of
+    routing extracted text to the tutor."""
+
+    enhanced_note: str | None = None
+    """What to say alongside it. Written by `enhance.describe`, which is
+    careful never to claim it recovered focus that was not in the image."""
 
 
 class MediaPipeline:
@@ -169,6 +198,12 @@ class MediaPipeline:
         media = await media_repo.get_or_create_media(
             session, subject_id=subject_id, conversation_id=conversation_id, ref=ref
         )
+        # Only while it is still unknown: once the file has been fetched and
+        # sniffed, the validator's answer is the true one and this claim is not.
+        if media.kind is None:
+            declared = _KIND_FOR_MESSAGE_TYPE.get(message_type)
+            if declared is not None:
+                media.kind = str(declared)
         state = MediaState(media.state)
 
         # Already past intake: a redelivered event must not restart the pipeline.
@@ -254,6 +289,21 @@ class MediaPipeline:
             return ProcessOutcome(state=state)
 
         subject_id = media.subject_id
+
+        # Close the caller's read transaction before the two slowest hops.
+        #
+        # The job loads `media` with a SELECT, which opens a transaction, and
+        # the next writes are minutes of wall-clock away: a download from Meta
+        # and a multi-megabyte upload to R2. Holding a transaction across those
+        # pins one of only four pooled connections and, on a database shared
+        # with another product, holds back autovacuum's xmin for the duration.
+        #
+        # Nothing has been written yet, so this commits an empty transaction -
+        # there is no state here to lose, and a crash before the next write
+        # still leaves the row at FETCH_QUEUED for the retry. Commit rather
+        # than rollback because rollback expires `media` and the next attribute
+        # read would lazy-load from inside async code.
+        await session.commit()
 
         # --- fetch -----------------------------------------------------------
         try:
@@ -549,6 +599,38 @@ class MediaPipeline:
         """
         await media_repo.transition(session, media, MediaState.EXTRACTION_PLANNED)
         await media_repo.transition(session, media, MediaState.EXTRACTING)
+
+        # "This is blurry, can you make it clearer?" is a request for a picture,
+        # not for an answer. Handled before extraction because the student did
+        # not ask a question - running OCR and then a vision model here would
+        # bill them for reading a page they only wanted cleaned up.
+        #
+        # `wants_enhancement` is deliberately narrow and rejects "solve this,
+        # the photo is blurry", which stays on the ordinary path below.
+        if enhance.wants_enhancement(media.brief):
+            try:
+                cleaned = enhance.enhance(data)
+            except Exception:
+                # Presentation, not correctness: fall through and answer the
+                # page instead of failing the job over a filter.
+                logger.warning("image_enhancement_failed", media_id=str(media.id))
+            else:
+                await media_repo.transition(session, media, MediaState.READY_FOR_CAPABILITY)
+                logger.info(
+                    "image_enhanced",
+                    sharpness_before=round(cleaned.before.sharpness, 1),
+                    sharpness_after=round(cleaned.after.sharpness, 1),
+                    improved=cleaned.improved,
+                )
+                return ProcessOutcome(
+                    state=MediaState.READY_FOR_CAPABILITY,
+                    fetched=True,
+                    # No picture when the result is still unreadable:
+                    # `describe` says so and tells them how to retake it, and
+                    # sending an image under that sentence contradicts it.
+                    enhanced_png=cleaned.png if cleaned.rescued else None,
+                    enhanced_note=enhance.describe(cleaned),
+                )
 
         cached = await media_repo.load_cached_extraction(
             session,

@@ -13,6 +13,7 @@ from tutortwin.api.routes.admin import (
     catalog,
     jobs,
     overview,
+    payments,
     students,
     tutors,
 )
@@ -24,5 +25,6 @@ router.include_router(students.router)
 router.include_router(tutors.router)
 router.include_router(catalog.router)
 router.include_router(jobs.router)
+router.include_router(payments.router)
 
 __all__ = ["router"]

@@ -102,6 +102,7 @@ jobs:
             cd $DEST
             export PORT=3011 HOSTNAME=127.0.0.1
             export TUTORTWIN_API_URL=https://api.nxtutors.com
+            export TUTORTWIN_ENVIRONMENT=production
             if command -v pm2 >/dev/null 2>&1; then
               pm2 describe tutortwin-admin >/dev/null 2>&1 \
                 && pm2 restart tutortwin-admin --update-env \

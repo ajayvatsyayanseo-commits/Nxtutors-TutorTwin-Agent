@@ -174,9 +174,7 @@ class CashfreeClient:
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            logger.error(
-                "cashfree_fetch_failed", order_id=order_id, error_type=type(exc).__name__
-            )
+            logger.error("cashfree_fetch_failed", order_id=order_id, error_type=type(exc).__name__)
             raise CashfreeError("could not fetch the order") from exc
         result: dict[str, Any] = response.json()
         return result

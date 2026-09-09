@@ -154,6 +154,15 @@ class CloudTasksQueue:
         logger.info("cloud_task_enqueued", job_id=str(job_id), delay_seconds=delay_seconds)
 
 
+DISPATCH_ATTEMPTS = 4
+"""Dispatch tries per job when the ceiling defers it. Four attempts at the
+backoff below spans about a minute, which is the length of a media job - so a
+deferred job is picked up as the fleet drains rather than waiting for a
+restart."""
+
+DISPATCH_BACKOFF_SECONDS = 8.0
+
+
 @dataclass(slots=True)
 class InProcessTaskQueue:
     """Dispatch on the same machine, for a deployment that owns its server.
@@ -175,7 +184,7 @@ class InProcessTaskQueue:
     Durability is unchanged and already handled: the job is a committed Postgres
     row with a state and an attempt count before this is ever called. A crash
     mid-flight leaves it retryable rather than lost - the difference from Cloud
-    Tasks is that nothing will retry it automatically, so `sweep_stale_jobs`
+    Tasks is that nothing re-delivers it automatically, so `services.job_sweep`
     runs at startup to pick up whatever the last process left behind.
     """
 
@@ -190,7 +199,7 @@ class InProcessTaskQueue:
         self.dispatched.append(job_id)
         asyncio.create_task(self._run(job_id, delay_seconds))  # noqa: RUF006
 
-    async def _run(self, job_id: UUID, delay_seconds: int) -> None:
+    async def _run(self, job_id: UUID, delay_seconds: int, *, attempt: int = 1) -> None:
         import asyncio
 
         import httpx
@@ -208,6 +217,13 @@ class InProcessTaskQueue:
             logger.info(
                 "in_process_job_dispatched", job_id=str(job_id), status=response.status_code
             )
+            # 429 is the fleet concurrency ceiling saying "not now". Cloud Tasks
+            # would re-deliver on its own backoff; nothing else here will, so
+            # coming back is this queue's job. The startup sweep is the backstop
+            # if the process dies before the last attempt.
+            if response.status_code == 429 and attempt < DISPATCH_ATTEMPTS:
+                await asyncio.sleep(DISPATCH_BACKOFF_SECONDS * attempt)
+                await self._run(job_id, 0, attempt=attempt + 1)
         except Exception as exc:  # noqa: BLE001 - dispatch must never kill the caller
             # The row is committed and retryable; the startup sweep will find it.
             logger.error(

@@ -70,6 +70,18 @@ class OCRProvider(Protocol):
     async def read(self, image_png: bytes) -> OcrResult: ...
 
 
+def _garbage_ratio(text: str) -> float:
+    """Share of characters that are neither letters, digits nor whitespace.
+
+    Tesseract does not fail loudly on a page it cannot segment - it emits runs
+    of punctuation. This is the tell, and both the usability check and the
+    best-pass comparison need it.
+    """
+    if not text:
+        return 0.0
+    return sum(1 for c in text if not c.isalnum() and not c.isspace()) / len(text)
+
+
 def assess(result: OcrResult, *, expect_math: bool = False) -> OcrAssessment:
     """Is this OCR output good enough to use without a vision model?
 
@@ -82,8 +94,7 @@ def assess(result: OcrResult, *, expect_math: bool = False) -> OcrAssessment:
     if len(text) < MIN_USABLE_CHARS:
         return OcrAssessment(False, "ocr_output_too_short")
 
-    non_alnum = sum(1 for c in text if not c.isalnum() and not c.isspace())
-    if non_alnum / len(text) > MAX_GARBAGE_RATIO:
+    if _garbage_ratio(text) > MAX_GARBAGE_RATIO:
         return OcrAssessment(False, "ocr_output_mostly_symbols")
 
     if result.mean_confidence is not None and result.mean_confidence < MIN_MEAN_CONFIDENCE:
@@ -134,6 +145,15 @@ def _better(candidate: OcrResult, incumbent: OcrResult | None) -> bool:
         return False
     if not old_len:
         return True
+
+    # More text only wins if it is more *text*. PSM 3 mis-splits a photographed
+    # page into imaginary columns and pads the reading with punctuation runs,
+    # which is longer without carrying one extra word - and the length rule
+    # below would hand it the page. Checked before length for that reason.
+    new_junk = _garbage_ratio(candidate.text) > MAX_GARBAGE_RATIO
+    old_junk = _garbage_ratio(incumbent.text) > MAX_GARBAGE_RATIO
+    if new_junk != old_junk:
+        return old_junk
 
     new_conf = candidate.mean_confidence or 0.0
     old_conf = incumbent.mean_confidence or 0.0

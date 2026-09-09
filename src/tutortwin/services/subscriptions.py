@@ -157,19 +157,69 @@ async def assign_named_tutor(session: AsyncSession, subject: Subject, tutor_name
             )
         )
 
-    already = (
+    # One active assignment per student, which is the invariant the admin
+    # reassign endpoint already enforces and the admin student list depends on:
+    # it outer-joins active assignments, so a second one duplicates the student
+    # in the table, and the runtime would pick between them by insertion order.
+    already = None
+    for row in (
         await session.execute(
             select(TutorAssignment).where(
                 TutorAssignment.subject_id == subject.id,
-                TutorAssignment.tutor_id == tutor.id,
                 TutorAssignment.is_active.is_(True),
             )
         )
-    ).scalar_one_or_none()
+    ).scalars():
+        if row.tutor_id == tutor.id:
+            already = row
+        else:
+            # Superseded, not deleted - who taught whom, and when, is history.
+            row.is_active = False
+
     if already is None:
         session.add(TutorAssignment(subject_id=subject.id, tutor_id=tutor.id, is_active=True))
 
     return tutor
+
+
+async def _supersede_active_entitlements(session: AsyncSession, subject: Subject) -> None:
+    """Take the subject's row lock, then retire whatever is currently ACTIVE.
+
+    The lock is the point. Without it two activations of the same student run
+    the scan below concurrently, neither sees the other's uncommitted row, and
+    both insert an ACTIVE entitlement. The module docstring is explicit that
+    concurrent activation is the normal case here - Cashfree delivers webhooks
+    at least once and the student's browser triggers a status check on return -
+    so this is a routine path, not a race that needs an unlucky day.
+
+    Two ACTIVE rows is not merely untidy: the admin student list outer-joins
+    active entitlements, so the student appears twice in the table, and the
+    entitlement gateway has to pick between rows by timestamp.
+
+    `FOR UPDATE` on the subject serialises every grant for that student,
+    whichever door it came in by - paid activation or an operator's manual
+    grant both route through here.
+    """
+    await session.execute(select(Subject.id).where(Subject.id == subject.id).with_for_update())
+
+    # Read AFTER the lock: under READ COMMITTED this statement takes its
+    # snapshot once the lock is granted, so it sees the row the transaction
+    # ahead of us just committed.
+    current = (
+        (
+            await session.execute(
+                select(Entitlement).where(
+                    Entitlement.subject_id == subject.id, Entitlement.status == ACTIVE
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # Superseded, not deleted. Who had what, when, is what settles a billing
+    # dispute, and a renewal must not erase the previous term.
+    for row in current:
+        row.status = "SUPERSEDED"
 
 
 async def activate_payment(
@@ -193,6 +243,20 @@ async def activate_payment(
         logger.info("payment_already_activated", order_id=payment.order_id)
         return ActivationResult(activated=False)
 
+    # Re-check under the payment's row lock. The caller's read of `activated_at`
+    # above happened outside any lock, so two deliveries of the same order can
+    # both pass it. This blocks until the transaction ahead commits, then reads
+    # the value it wrote - which is the difference between "activated once" and
+    # "granted a second month and sent the student a second receipt".
+    already = (
+        await session.execute(
+            select(Payment.activated_at).where(Payment.id == payment.id).with_for_update()
+        )
+    ).scalar_one_or_none()
+    if already is not None:
+        logger.info("payment_already_activated_concurrently", order_id=payment.order_id)
+        return ActivationResult(activated=False)
+
     signup = (
         await session.execute(select(Signup).where(Signup.id == payment.signup_id))
     ).scalar_one_or_none()
@@ -205,17 +269,7 @@ async def activate_payment(
     subject = await get_or_create_subject(session, signup.whatsapp_number, signup.student_name)
     await assign_named_tutor(session, subject, signup.tutor_name)
 
-    # Supersede rather than delete. Who had what, when, is what a billing
-    # dispute is settled with, and a renewal must not erase the previous term.
-    current = (
-        await session.execute(
-            select(Entitlement).where(
-                Entitlement.subject_id == subject.id, Entitlement.status == ACTIVE
-            )
-        )
-    ).scalars().all()
-    for row in current:
-        row.status = "SUPERSEDED"
+    await _supersede_active_entitlements(session, subject)
 
     ends_at = now + timedelta(days=payment.plan_days)
     session.add(
@@ -300,15 +354,7 @@ async def grant_manual_subscription(
     await assign_named_tutor(session, subject, tutor_name)
     signup.subject_id = subject.id
 
-    current = (
-        await session.execute(
-            select(Entitlement).where(
-                Entitlement.subject_id == subject.id, Entitlement.status == ACTIVE
-            )
-        )
-    ).scalars().all()
-    for row in current:
-        row.status = "SUPERSEDED"
+    await _supersede_active_entitlements(session, subject)
 
     ends_at = now + timedelta(days=days)
     session.add(

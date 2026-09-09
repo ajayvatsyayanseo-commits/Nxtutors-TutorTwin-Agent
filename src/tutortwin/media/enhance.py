@@ -42,9 +42,42 @@ sharpening a too-small image amplifies noise instead of text."""
 
 SHARP_THRESHOLD = 120.0
 """Variance of the Laplacian, the standard focus measure. Above this a page is
-in focus; below about 40 it is genuinely blurred and no filter will fix it."""
+in focus.
 
-HOPELESS_THRESHOLD = 25.0
+It says nothing about whether a softer page can be fixed - measurement says a
+page scoring 5.7 enhances to one Tesseract reads perfectly. This decides which
+words to use when describing the photo; `HOPELESS_THRESHOLD` decides whether
+there is a photo worth sending back."""
+
+HOPELESS_THRESHOLD = 18.0
+"""Applied to the sharpness AFTER enhancement, not before.
+
+Measured, not assumed. A page of 48pt text was blurred by a known radius, then
+the enhanced copy was read back with Tesseract:
+
+    blur  before   after   OCR of the enhanced copy
+    0.0    442.3  1032.3   4/4 words, confidence 0.95
+    1.0     39.9   643.1   4/4, 0.95
+    2.0      5.7   199.8   4/4, 0.86
+    3.0      1.1    54.8   3/4, 0.63
+    4.0      0.3    21.2   4/4, 0.73
+    5.0      0.2    14.1   0/4, 0.43
+    8.0      0.1    13.4   0/4, 0.17
+
+Two things to read from that. First, the `before` column separates nothing:
+5.7 is perfectly recoverable and 0.3 is borderline, and both sit far below any
+threshold that would admit 39.9. Whether a photo was beyond rescue is only
+knowable once it has been rescued or not, which is why this is applied to
+`Enhanced.after` and lives on `Enhanced.rescued`.
+
+Second, the boundary is soft, and the table is kept in full rather than tidied
+because of it: radius 3 scores WORSE on OCR than radius 4 despite being less
+blurred, because sharpening a nearly-flat image produces ringing that helps or
+hurts by luck. Readability collapses for good between 21.2 and 14.1, so the
+threshold sits between them - with the margin on the conservative side, since
+telling a student to retake a photo we could have cleaned is a smaller failure
+than handing back an unreadable one under the words "here it is, cleaned up"."""
+
 
 # Document thresholds, measured rather than assumed. A clean rendered page reads
 # brightness 249 / contrast 35; a legibly dim one 111 / 16; an unreadable one
@@ -70,8 +103,14 @@ class ImageAssessment:
         return self.sharpness < SHARP_THRESHOLD
 
     @property
-    def is_hopeless(self) -> bool:
-        """Too blurred to rescue. Say so rather than returning the same image."""
+    def is_severely_blurred(self) -> bool:
+        """Badly out of focus - a description of this image, not a prediction.
+
+        Do NOT read this as "cannot be rescued": measurement says a page at
+        sharpness 5.9 enhances to fully readable. `Enhanced.rescued` is the
+        property that answers that question, and it can only be asked
+        afterwards.
+        """
         return self.sharpness < HOPELESS_THRESHOLD
 
     @property
@@ -90,7 +129,7 @@ class ImageAssessment:
         "washed out above 215, low contrast below 40" flags all of them.
         """
         found: list[str] = []
-        if self.is_hopeless:
+        if self.is_severely_blurred:
             found.append("very blurred")
         elif self.is_blurred:
             found.append("slightly out of focus")
@@ -114,6 +153,17 @@ class Enhanced:
     png: bytes
     before: ImageAssessment
     after: ImageAssessment
+
+    @property
+    def rescued(self) -> bool:
+        """Is the result actually readable?
+
+        The ratio test below cannot answer this: sharpening a destroyed photo
+        multiplies a near-zero baseline into a large-looking gain, so `improved`
+        is True for a blur radius of 8 that OCR reads at 0/4 words. Absolute
+        sharpness after the fact is what separates them.
+        """
+        return self.after.sharpness >= HOPELESS_THRESHOLD
 
     @property
     def improved(self) -> bool:
@@ -142,9 +192,7 @@ def _laplacian_variance(grey: object) -> float:
 
     # 4-neighbour Laplacian, computed by slicing rather than convolution.
     centre = array[1:-1, 1:-1]
-    lap = (
-        array[:-2, 1:-1] + array[2:, 1:-1] + array[1:-1, :-2] + array[1:-1, 2:] - 4.0 * centre
-    )
+    lap = array[:-2, 1:-1] + array[2:, 1:-1] + array[1:-1, :-2] + array[1:-1, 2:] - 4.0 * centre
     return float(lap.var())
 
 
@@ -217,9 +265,7 @@ def enhance(image_bytes: bytes) -> Enhanced:
         # Unsharp mask. `percent` is deliberately moderate: over-sharpening
         # creates white halos around letters that OCR reads as spaces, turning
         # a legible word into two illegible ones.
-        working = working.filter(
-            ImageFilter.UnsharpMask(radius=2.0, percent=145, threshold=3)
-        )
+        working = working.filter(ImageFilter.UnsharpMask(radius=2.0, percent=145, threshold=3))
 
         buffer = io.BytesIO()
         working.save(buffer, format="PNG", optimize=True)
@@ -241,7 +287,7 @@ def describe(result: Enhanced) -> str:
     Never claims to have fixed focus. A photo that was out of focus is still out
     of focus; what changed is contrast and edge definition.
     """
-    if result.before.is_hopeless:
+    if not result.rescued:
         return (
             "That photo is too blurred for me to rescue - the detail is not in the "
             "image to recover. Retake it with the phone flat above the page, in as "

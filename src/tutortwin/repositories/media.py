@@ -7,11 +7,11 @@ straight to FETCHED, whatever it intends.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -246,6 +246,63 @@ async def mark_job(
         job.next_retry_at = next_retry_at
 
 
+STALE_RUNNING_AFTER = timedelta(minutes=15)
+"""How long a RUNNING row may go untouched before it is presumed abandoned.
+
+The same window the fleet in-flight count uses, and it has to be: a job counted
+as in-flight there must not be re-dispatched here, or the concurrency ceiling
+and the sweep would fight each other.
+"""
+
+_SETTLED = ("SUCCEEDED", "FAILED_PERMANENT")
+
+
+async def find_resumable_jobs(
+    session: AsyncSession, *, now: datetime | None = None, limit: int = 200
+) -> list[Job]:
+    """Jobs that nothing will run unless something re-dispatches them.
+
+    Three shapes, all produced by ordinary operation on a server deployment:
+
+    - PENDING: committed but never dispatched, or dispatched and shed by the
+      concurrency ceiling, which answers 429 and leaves the row untouched.
+    - FAILED with its retry time reached: the handler set `next_retry_at` and
+      then nothing was watching the clock.
+    - RUNNING but untouched for longer than the in-flight window: the process
+      holding it is gone.
+
+    Settled rows and rows out of attempts are excluded, so a sweep can be run
+    repeatedly without pushing a permanently failed job around forever.
+    """
+    moment = now or datetime.now(UTC)
+    stale_before = moment - STALE_RUNNING_AFTER
+    return list(
+        (
+            await session.execute(
+                select(Job)
+                .where(
+                    Job.state.notin_(_SETTLED),
+                    Job.attempts < Job.max_attempts,
+                    or_(
+                        and_(
+                            Job.state == "PENDING",
+                            or_(Job.next_retry_at.is_(None), Job.next_retry_at <= moment),
+                        ),
+                        and_(Job.state == "FAILED", Job.next_retry_at <= moment),
+                        and_(Job.state == "RUNNING", Job.updated_at < stale_before),
+                    ),
+                )
+                # Oldest first: a student who has been waiting longest is
+                # answered first.
+                .order_by(Job.created_at)
+                .limit(limit)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
 async def load_extractions(session: AsyncSession, media: MediaObject) -> list[MediaExtraction]:
     """Every page of text read from one media object, in page order.
 
@@ -267,3 +324,45 @@ async def load_extractions(session: AsyncSession, media: MediaObject) -> list[Me
         )
     ).scalars()
     return list(rows)
+
+
+BRIEF_WAIT_WINDOW = timedelta(hours=24)
+"""How long a held attachment may still claim a later message as its brief.
+
+The same 24 hours as WhatsApp's customer service window, and for the same
+reason: after it, the conversation is closed and the student's next message
+starts a new one. Without a bound, a photo abandoned in WAITING_FOR_BRIEF sits
+there indefinitely and silently swallows whatever the student types next - a
+question asked a week later would be answered as an instruction about a
+forgotten picture.
+"""
+
+
+async def find_waiting_for_brief(
+    session: AsyncSession, subject_id: UUID, *, now: datetime | None = None
+) -> MediaObject | None:
+    """The most recent attachment this student was asked to describe.
+
+    Without this the brief gate is a dead end. The agent replies "tell me what
+    you would like me to do with it", the student types "solve question 3", and
+    that text arrives as an ordinary TEXT message which never looks for the
+    waiting file - so the model answers a question with no image attached and
+    the photo sits in WAITING_FOR_BRIEF forever. The agent asks something and
+    then ignores the answer.
+
+    Newest first, because a student who sends two photos and one instruction
+    means the second photo.
+    """
+    cutoff = (now or datetime.now(UTC)) - BRIEF_WAIT_WINDOW
+    return (
+        await session.execute(
+            select(MediaObject)
+            .where(
+                MediaObject.subject_id == subject_id,
+                MediaObject.state == MediaState.WAITING_FOR_BRIEF.value,
+                MediaObject.created_at >= cutoff,
+            )
+            .order_by(MediaObject.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()

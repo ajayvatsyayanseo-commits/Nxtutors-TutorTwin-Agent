@@ -40,13 +40,13 @@ from tutortwin.providers.fakes import (
     FakeEntitlementGateway,
     FakeIdentityGateway,
     FakeOutboundGateway,
-    FakeTutorGateway,
     SystemClock,
 )
 from tutortwin.providers.gateway import ModelGateway
 from tutortwin.providers.registry import build_gateway_factory
 from tutortwin.security.auth import InternalAuth
 from tutortwin.services.entitlements import DatabaseEntitlementGateway
+from tutortwin.services.tutors import DatabaseTutorGateway
 
 logger = get_logger(__name__)
 
@@ -72,6 +72,10 @@ class Container:
 
     cashfree: CashfreeClient | None = None
     """Present only when payment credentials are configured."""
+
+    task_queue: TaskQueue | None = None
+    """Held so startup can re-dispatch jobs a previous process left behind.
+    The pipeline owns the same object; this is the handle, not a second queue."""
 
     def build_gateway(self) -> ModelGateway | None:
         """A fresh gateway per job. None when no vendor is configured."""
@@ -102,7 +106,10 @@ def build_container(settings: Settings) -> Container:
         # config-list gateway meant a paid subscription and an operator's grant
         # both landed in a table nobody consulted.
         entitlement=entitlement,
-        tutor=FakeTutorGateway(),
+        # The name the student chose at signup, read from `tutor_assignments`.
+        # The fake returned a constant, so the persona field the form collects
+        # reached the system prompt as somebody else's name.
+        tutor=DatabaseTutorGateway(get_session_factory()),
         outbound=outbound,
         clock=SystemClock(),
         session_factory=get_session_factory(),
@@ -137,11 +144,12 @@ def build_container(settings: Settings) -> Container:
         if whatsapp
         else local_source
     )
+    task_queue = _build_task_queue(settings)
     pipeline = MediaPipeline(
         source=source,
         blobstore=_build_blobstore(settings, media_root),
         ocr=TesseractOCRProvider(command=settings.tesseract_cmd),
-        queue=_build_task_queue(settings),
+        queue=task_queue,
         transcriber=_build_transcriber(settings),
     )
 
@@ -159,6 +167,7 @@ def build_container(settings: Settings) -> Container:
         entitlement=entitlement,
         media_pipeline=pipeline,
         gateway_factory=gateway_factory,
+        task_queue=task_queue,
         whatsapp=whatsapp,
         cashfree=_build_cashfree(settings),
     )

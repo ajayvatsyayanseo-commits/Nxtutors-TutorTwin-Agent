@@ -105,9 +105,7 @@ def is_renderable(expression: str) -> bool:
         # An odd number of delimiters means mathtext will swallow the rest of
         # the string into maths mode and render nonsense.
         return False
-    return any(ch in text for ch in "\\^_{}=+-/") or bool(
-        re.search(r"[0-9]", text)
-    )
+    return any(ch in text for ch in "\\^_{}=+-/") or bool(re.search(r"[0-9]", text))
 
 
 def render(expression: str, *, colour: str = "#0b1020") -> RenderedMath:

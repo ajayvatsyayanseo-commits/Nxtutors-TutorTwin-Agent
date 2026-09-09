@@ -88,3 +88,18 @@ export function titleCase(value: string): string {
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
 }
+
+/**
+ * Paise to rupees.
+ *
+ * Integer paise everywhere on the wire, divided only here. Money that travels
+ * as a float eventually pays somebody 99.99999 rupees, and the conversation
+ * that follows is not one anybody wants to have with a customer.
+ */
+export function formatPaise(paise: number, currency = "INR"): string {
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency,
+    maximumFractionDigits: 2,
+  }).format(paise / 100);
+}

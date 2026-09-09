@@ -99,6 +99,22 @@ def record_high_risk(
     )
 
 
+_CONTROL_CHARS = frozenset(chr(code) for code in range(32)) | {chr(127)}
+
+
+def like_pattern(term: str) -> str:
+    """Escape LIKE wildcards so a search term matches itself and nothing else.
+
+    Control characters are stripped first. A NUL byte is not merely useless in a
+    search - PostgreSQL text cannot hold one, so passing it through turns a
+    hostile query parameter into a driver error and a 500. Measured: without this
+    line, `?q=%00truncated` crashed the endpoint.
+    """
+    cleaned = "".join(ch for ch in term if ch not in _CONTROL_CHARS)
+    escaped = cleaned.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def paginate(statement: Select[Any], *, page: int, page_size: int) -> Select[Any]:
     """Bounded server-side pagination. A caller cannot request the whole table."""
     size = max(1, min(page_size, MAX_PAGE_SIZE))

@@ -174,9 +174,7 @@ class Settings(BaseSettings):
     # rather than making somebody rename working credentials.
     whatsapp_access_token: SecretStr | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "TUTORTWIN_WHATSAPP_ACCESS_TOKEN", "WHATSAPP_ACCESS_TOKEN"
-        ),
+        validation_alias=AliasChoices("TUTORTWIN_WHATSAPP_ACCESS_TOKEN", "WHATSAPP_ACCESS_TOKEN"),
     )
     whatsapp_phone_number_id: str | None = Field(
         default=None,
@@ -186,9 +184,7 @@ class Settings(BaseSettings):
     )
     whatsapp_verify_token: SecretStr | None = Field(
         default=None,
-        validation_alias=AliasChoices(
-            "TUTORTWIN_WHATSAPP_VERIFY_TOKEN", "WHATSAPP_VERIFY_TOKEN"
-        ),
+        validation_alias=AliasChoices("TUTORTWIN_WHATSAPP_VERIFY_TOKEN", "WHATSAPP_VERIFY_TOKEN"),
     )
     """Echoed back to Meta during webhook registration. Meta sends it in the
     clear on a GET, so it proves only that whoever registered the webhook knew
@@ -209,9 +205,7 @@ class Settings(BaseSettings):
     )
     whatsapp_send_enabled: bool = Field(
         default=True,
-        validation_alias=AliasChoices(
-            "TUTORTWIN_WHATSAPP_SEND_ENABLED", "WHATSAPP_SEND_ENABLED"
-        ),
+        validation_alias=AliasChoices("TUTORTWIN_WHATSAPP_SEND_ENABLED", "WHATSAPP_SEND_ENABLED"),
     )
     """A kill switch for outbound only. False keeps the webhook receiving and
     the agent thinking, and stops anything reaching a real phone - which is what

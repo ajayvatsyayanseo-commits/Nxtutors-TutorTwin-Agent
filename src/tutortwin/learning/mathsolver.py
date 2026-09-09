@@ -143,6 +143,16 @@ _WRT = re.compile(r"with respect to\s+([a-z])\b", re.I)
 _SOLVE_FOR = re.compile(r"\bfor\s+([a-z])\b", re.I)
 
 
+# Every multi-letter name that may legitimately survive into an expression.
+# Derived from the parser's own whitelist so the two cannot drift: a function
+# the parser accepts but this rejects would refuse valid maths, and the reverse
+# would let an English word through as a product of symbols.
+_KNOWN_NAMES: frozenset[str] = frozenset(
+    {name.lower() for name in _SAFE_NAMES}
+    | {"pi", "oo", "inf", "infinity", "ln", "log", "exp", "abs", "sqrt"}
+)
+
+
 def detect_operation(question: str) -> Operation | None:
     """What is being asked. None means "not a computation" - answer in prose."""
     for operation, pattern in _LATEX_INTENT:
@@ -166,6 +176,12 @@ def _strip_latex(text: str) -> str:
     worse than a refusal.
     """
     out = text
+    # The derivative operator must be removed BEFORE the generic \frac rule, or
+    # `\frac{d}{dx}(x^3+2x)` becomes the fraction ((d)/(dx)) multiplied by the
+    # expression - which parses, evaluates, and returns nonsense with total
+    # confidence. The operator carries no value; `_LATEX_INTENT` already
+    # captured the intent from it.
+    out = re.sub(r"\\frac\s*\{\s*d\s*\}\s*\{\s*d\s*([a-z])\s*\}", " ", out)
     out = re.sub(r"\\frac\s*\{([^{}]+)\}\s*\{([^{}]+)\}", r"((\1)/(\2))", out)
     out = re.sub(r"\\sqrt\s*\{([^{}]+)\}", r"sqrt(\1)", out)
     out = re.sub(r"\\(left|right)", "", out)
@@ -212,6 +228,24 @@ def extract_expression(question: str) -> str:
     text = re.sub(r"d\s*[a-z]\s*$", "", text.strip())
     text = re.sub(r"^[\s:,.?-]+|[\s:,.?]+$", "", text)
     text = re.sub(r"\s{2,}", " ", text)
+
+    # Refuse anything still carrying an English word.
+    #
+    # This is the most dangerous failure this module can have, and it is silent.
+    # The instruction list above is a blocklist, so any word not on it survives
+    # into the expression, where implicit multiplication turns it into a product
+    # of single-letter symbols: `solve 2x + 5 = 13 quickly` returned
+    # `x = 13*c*i*k*l*q*u*y/2 - 5/2`, and the substitution check passed, so it
+    # was reported to the student as VERIFIED.
+    #
+    # A blocklist cannot be completed - students write "urgently", "asap", "sir".
+    # So the last word belongs to an allowlist: every remaining multi-letter run
+    # must be a mathematical function name, or this is not an expression and the
+    # model answers instead.
+    for word in re.findall(r"[A-Za-z]{2,}", text):
+        if word.lower() not in _KNOWN_NAMES:
+            raise Unsolvable(f"unrecognised word in expression: {word!r}")
+
     if not text:
         raise Unsolvable("no expression found")
     return text
@@ -256,7 +290,11 @@ def _solve_sync(question: str, operation: Operation) -> MathSolution:
     """The actual computation. Runs in a worker thread."""
     raw = extract_expression(question)
     parsed = _to_equation(raw)
-    expression = parsed.rhs - parsed.lhs if isinstance(parsed, sympy.Eq) else parsed
+    # lhs - rhs, NOT rhs - lhs. Backwards, `factorise x^2 - 9 = 0` returns
+    # -(x-3)(x+3): a valid factorisation of the negation, and the wrong answer
+    # to the question asked - reported as VERIFIED, because substituting into a
+    # negated expression still gives zero.
+    expression = parsed.lhs - parsed.rhs if isinstance(parsed, sympy.Eq) else parsed
     variable = _variable(question, parsed, operation)
     steps: list[str] = []
     verified = False

@@ -43,6 +43,7 @@ from tutortwin.domain.capabilities import IntentDecision, PedagogyMode
 from tutortwin.domain.errors import DependencyError
 from tutortwin.domain.events import (
     EventResponse,
+    MediaRef,
     MessageType,
     NormalizedEvent,
     OutboundAction,
@@ -74,6 +75,7 @@ from tutortwin.policies.budget_policy import (
 from tutortwin.providers.gateway import ModelGateway
 from tutortwin.repositories import catalog as catalog_repo
 from tutortwin.repositories import conversations as repo
+from tutortwin.repositories import media as media_repo
 from tutortwin.services.context import HeuristicTokenEstimator, Turn, assemble
 from tutortwin.services.prompts import build_system_prompt, prompt_version, stable_prefix
 
@@ -83,6 +85,15 @@ AI_FEATURE_FLAG = "ai_enabled"
 MAX_ASSEMBLED_CONTEXT_TOKENS = 8_000
 
 _PLANS: dict[str, PlanPolicy] = {"FREE": FREE_PLAN, "PRO": PRO_PLAN}
+
+# The reverse of the pipeline's message-type to kind mapping, for resuming a
+# held attachment whose originating event is gone.
+_MESSAGE_TYPE_FOR_KIND: dict[str, MessageType] = {
+    "IMAGE": MessageType.IMAGE,
+    "PDF": MessageType.PDF,
+    "AUDIO": MessageType.AUDIO,
+    "DOCUMENT": MessageType.DOCUMENT,
+}
 
 # What a student is told when a file is refused. Specific enough to act on,
 # vague enough not to describe the validator to someone probing it.
@@ -352,6 +363,29 @@ class TutorTwinEntryService:
             if handled is not None:
                 return handled
 
+        elif event.message.type is MessageType.TEXT and event.message.text:
+            # The brief the gate asked for.
+            #
+            # An unbriefed attachment is held at WAITING_FOR_BRIEF and the agent
+            # replies "tell me what you would like me to do with it". The
+            # student's answer arrives as an ordinary TEXT message - which,
+            # without this branch, goes straight to the tutoring path. The model
+            # then answers "solve question 3" with no image attached, and the
+            # photo waits forever. The agent asks a question and ignores the
+            # reply, which is worse than never having asked.
+            resumed = await self._resume_waiting_media(
+                session,
+                event=event,
+                subject=subject,
+                conversation=conversation,
+                request_event_id=request_event.id,
+                plan=plan,
+                entitlement=entitlement,
+                now=now,
+            )
+            if resumed is not None:
+                return resumed
+
         # Deterministic routing - no model call.
         intent = classify(event.message.text, has_history=bool(history))
         mode = intent.requested_mode or _default_mode(tutor)
@@ -558,6 +592,119 @@ class TutorTwinEntryService:
             status=str(status),
         )
         return response
+
+    async def _resume_waiting_media(  # noqa: PLR0913 - mirrors _handle_media
+        self,
+        session: AsyncSession,
+        *,
+        event: NormalizedEvent,
+        subject: ResolvedSubject,
+        conversation: ConversationRow,
+        request_event_id: UUID,
+        plan: PlanPolicy,
+        entitlement: EntitlementSnapshot,
+        now: datetime,
+    ) -> EventResponse | None:
+        """Treat this text as the brief for an attachment already waiting.
+
+        Returns a finished response when the text was consumed as a brief, and
+        None when there is nothing waiting - in which case the message carries
+        on to the ordinary tutoring path untouched.
+
+        Deliberately narrow. A student with a held photo who asks an unrelated
+        question must still get that question answered, so anything that does
+        not read as an instruction about a file is left alone.
+        """
+        pipeline = self._deps.media_pipeline
+        if pipeline is None:
+            return None
+
+        text = (event.message.text or "").strip()
+        if not has_brief(event):
+            return None
+
+        waiting = await media_repo.find_waiting_for_brief(session, subject.id, now=now)
+        if waiting is None:
+            return None
+
+        # Rebuild the reference from the stored row. The original MediaRef
+        # arrived on an earlier event that is long gone; the row is the record.
+        ref = MediaRef(
+            provider=waiting.source,
+            media_id=waiting.source_media_id,
+            mime_type_hint=waiting.mime_type,
+            size_hint=waiting.size_bytes,
+        )
+
+        allowance = await catalog_repo.load_quota_snapshot(
+            session,
+            subject_id=subject.id,
+            now=now,
+            daily_call_limit=plan.daily_call_limit,
+            user_daily_budget_micros=plan.user_daily_budget_micros,
+            daily_pdf_page_limit=plan.daily_pdf_page_limit,
+            daily_ocr_page_limit=plan.daily_ocr_page_limit,
+            daily_voice_second_limit=plan.daily_voice_second_limit,
+            daily_mock_limit=plan.daily_mock_limit,
+        )
+
+        outcome = await pipeline.intake(
+            session,
+            subject_id=subject.id,
+            conversation_id=conversation.id,
+            ref=ref,
+            # The row remembers what kind of file it is; the original message
+            # type arrived on an event that is long gone.
+            message_type=_MESSAGE_TYPE_FOR_KIND.get(waiting.kind or "", MessageType.DOCUMENT),
+            brief=text,
+            entitled=entitlement.allows_paid_ai and plan.allows_paid_ai,
+            correlation_id=event.correlation_id,
+            allowance=allowance,
+        )
+
+        logger.info(
+            "brief_attached_to_waiting_media",
+            media_id=str(waiting.id),
+            job_created=outcome.job_created,
+        )
+
+        if outcome.rejected:
+            reason = outcome.reject_reason
+            return await self._answer_deterministically(
+                session,
+                event=event,
+                subject=subject,
+                conversation_id=conversation.id,
+                request_event_id=request_event_id,
+                action=OutboundAction(
+                    type=OutboundActionType.SEND_TEXT,
+                    text=_MEDIA_REJECTION_TEXT.get(
+                        reason.value if reason else "", "I could not use that file."
+                    ),
+                ),
+                now=now,
+            )
+
+        if outcome.job_created:
+            return await self._answer_deterministically(
+                session,
+                event=event,
+                subject=subject,
+                conversation_id=conversation.id,
+                request_event_id=request_event_id,
+                action=OutboundAction(
+                    type=OutboundActionType.SEND_TEXT,
+                    text=(
+                        "Got it - I am reading your file now. "
+                        "I will come back with the answer shortly."
+                    ),
+                ),
+                now=now,
+            )
+
+        # Still gated, or already in flight. Say nothing new rather than
+        # answering the brief as if it were a tutoring question.
+        return None
 
     async def _handle_media(  # noqa: PLR0913 - one argument per gate input
         self,

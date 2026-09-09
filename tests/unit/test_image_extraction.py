@@ -29,6 +29,7 @@ from tutortwin.domain.provider import (
     Provider,
     StopReason,
 )
+from tutortwin.media import ocr
 from tutortwin.media.extractor import IMAGE_PARSER_VERSION, ImageExtractor
 from tutortwin.media.ocr import OcrResult
 
@@ -266,3 +267,57 @@ class TestRefusalIsHonest:
         outcome = await run(StubOCR(result=good_ocr()), StubGateway(), brief="explain")
         assert outcome.result.parser_version == IMAGE_PARSER_VERSION
         assert IMAGE_PARSER_VERSION != PARSER_VERSION
+
+
+class TestBestOcrPassSelection:
+    """Which of the three page-segmentation passes wins.
+
+    Tesseract is run at PSM 6, 4 and 3 and the best reading is kept. "Best" is
+    the whole question: pick it wrong and the tutor answers a page it misread,
+    or escalates to a paid vision model it did not need.
+    """
+
+    @staticmethod
+    def result(text: str, confidence: float | None) -> OcrResult:
+        return OcrResult(text=text, mean_confidence=confidence, engine="test")
+
+    def test_a_longer_reading_beats_a_confident_fragment(self) -> None:
+        """Confidence alone picks the wrong winner.
+
+        A mode that finds three characters it is certain of scores 0.99 and
+        loses the rest of the question.
+        """
+        fragment = self.result("2x", 0.99)
+        full = self.result("Question 4. Solve for x in 2x + 5 = 13, showing working.", 0.78)
+
+        assert ocr._better(full, fragment) is True
+        assert ocr._better(fragment, full) is False
+
+    def test_a_longer_reading_made_of_punctuation_does_not_win(self) -> None:
+        """The regression this guard exists for.
+
+        PSM 3 mis-splits a photographed page into imaginary columns and pads
+        the reading with punctuation runs. It is longer, so the length rule
+        handed it the page - and the tutor received symbols instead of the
+        question.
+        """
+        clean = self.result("Question 4. Solve for x in 2x + 5 = 13.", 0.88)
+        junk = self.result("|.-' |[..]| ~~ ||| ,,, :::: ;;; '''' |||| ,.,.,. ==== ////" * 2, 0.61)
+
+        assert len(junk.text) > len(clean.text) * 1.5
+        assert ocr._better(junk, clean) is False
+        assert ocr._better(clean, junk) is True
+
+    def test_confidence_decides_between_comparable_readings(self) -> None:
+        low = self.result("Question 4. Solve for x in 2x + 5 = 13.", 0.62)
+        high = self.result("Question 4. Solve for y in 2y + 5 = 13.", 0.91)
+
+        assert ocr._better(high, low) is True
+        assert ocr._better(low, high) is False
+
+    def test_the_first_pass_always_wins_and_an_empty_one_never_does(self) -> None:
+        first = self.result("Question 4.", 0.8)
+
+        assert ocr._better(first, None) is True
+        assert ocr._better(self.result("", None), first) is False
+        assert ocr._better(first, self.result("", None)) is True

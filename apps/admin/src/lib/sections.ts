@@ -64,6 +64,7 @@ export const SECTION_GROUPS: SectionGroup[] = [
     title: "Governance",
     items: [
       { href: "/costs", label: "Costs", permission: "cost:read" },
+      { href: "/payments", label: "Payments & signups", permission: "payment:read" },
       { href: "/audit", label: "Audit log", permission: "audit:read" },
       { href: "/admins", label: "Administrators", permission: "admin_user:read" },
     ],

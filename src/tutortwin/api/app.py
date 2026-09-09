@@ -62,6 +62,54 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 schema=settings.database_postgres_schema,
                 search_path=settings.search_path,
             )
+        elif settings.is_deployed:
+            # `public` is the DEFAULT, so a deployment that simply forgot to set
+            # the schema lands here silently - and on a shared database that
+            # means creating our 42 tables alongside another product's, with no
+            # isolation and no guard, which is unrecoverable once it has
+            # happened.
+            #
+            # Not a hard failure: a database TutorTwin owns outright is a
+            # legitimate configuration and `public` is correct there. So this
+            # counts the tables it did not put there and says so loudly.
+            from sqlalchemy import text as _sql
+
+            from tutortwin.db.engine import get_session_factory
+
+            async with get_session_factory()() as probe:
+                foreign = int(
+                    (
+                        await probe.execute(
+                            _sql(
+                                "select count(*) from pg_tables "
+                                "where schemaname = 'public' "
+                                "and tablename not in "
+                                "(select tablename from pg_tables where schemaname = 'public' "
+                                " and tablename like 'tutortwin%')"
+                            )
+                        )
+                    ).scalar()
+                    or 0
+                )
+            if foreign > 50:
+                logger.warning(
+                    "schema_is_public_on_a_populated_database",
+                    public_tables=foreign,
+                    detail=(
+                        "TUTORTWIN_DATABASE_POSTGRES_SCHEMA is unset or 'public' and this "
+                        "database already holds many tables. If it is shared with another "
+                        "product, set a dedicated schema BEFORE migrating."
+                    ),
+                )
+
+        # Anything the last process left stalled. Only where nothing else
+        # retries: Cloud Tasks re-delivers on its own, so sweeping a serverless
+        # deployment would race its queue rather than help it.
+        if not settings.is_serverless and container.task_queue is not None:
+            from tutortwin.db.engine import get_session_factory
+            from tutortwin.services import job_sweep
+
+            await job_sweep.sweep(get_session_factory(), container.task_queue)
 
         logger.info(
             "service_started",

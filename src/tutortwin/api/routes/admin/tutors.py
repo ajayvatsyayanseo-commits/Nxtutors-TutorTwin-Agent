@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import func, select
 
 from tutortwin.api.admin_deps import DbSession, require
-from tutortwin.api.routes.admin.students import like_pattern
 from tutortwin.db.models import Subject, Tutor, TutorAssignment, TutorPersonaVersion
 from tutortwin.domain.admin import (
     AdminActor,
@@ -51,7 +50,7 @@ async def list_tutors(
 ) -> list[TutorSummary]:
     base = select(Tutor)
     if q:
-        base = base.where(Tutor.display_name.ilike(like_pattern(q.strip()), escape="\\"))
+        base = base.where(Tutor.display_name.ilike(admin_repo.like_pattern(q.strip()), escape="\\"))
 
     tutors = list((await db.execute(base.order_by(Tutor.display_name))).scalars())
     if not tutors:

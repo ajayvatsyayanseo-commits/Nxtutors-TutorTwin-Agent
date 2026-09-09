@@ -425,3 +425,52 @@ export interface AssessmentSummary {
   attempts: number;
   created_at: string;
 }
+
+export interface PaymentView {
+  id: string;
+  order_id: string;
+  gateway: string;
+  gateway_payment_id: string | null;
+  amount_paise: number;
+  currency: string;
+  plan_code: string;
+  plan_days: number;
+  status: string;
+  /** Null on a PAID row means charged but never granted access. */
+  activated_at: string | null;
+  created_at: string;
+  student_name: string;
+  whatsapp_number: string;
+  contact_phone: string | null;
+  tutor_name: string;
+  subject: string;
+  location: string | null;
+  signup_id: string;
+  signup_status: string;
+  subject_id: string | null;
+}
+
+export interface SignupView {
+  id: string;
+  student_name: string;
+  whatsapp_number: string;
+  contact_phone: string | null;
+  tutor_name: string;
+  subject: string;
+  location: string | null;
+  status: string;
+  subject_id: string | null;
+  created_at: string;
+  payment_count: number;
+  paid: boolean;
+}
+
+export interface RevenueSummary {
+  signups: number;
+  paid_signups: number;
+  abandoned_signups: number;
+  orders: number;
+  paid_orders: number;
+  gross_paise: number;
+  awaiting_activation: number;
+}

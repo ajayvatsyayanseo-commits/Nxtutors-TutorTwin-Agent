@@ -62,6 +62,10 @@ class Permission(StrEnum):
 
     COST_READ = "cost:read"
 
+    PAYMENT_READ = "payment:read"
+    """Signups and orders. Read only - money is corrected at the gateway
+    and re-applied through the webhook, never by editing a row."""
+
     FLAG_READ = "flag:read"
     FLAG_WRITE = "flag:write"
 
@@ -132,6 +136,9 @@ _USAGE_VIEWER: frozenset[Permission] = frozenset(
     {
         Permission.DASHBOARD_READ,
         Permission.COST_READ,
+        # Revenue belongs beside spend: this role exists to answer "what is
+        # this costing us", and the answer is meaningless without the other side.
+        Permission.PAYMENT_READ,
         Permission.MODEL_READ,
         Permission.PLAN_READ,
     }
