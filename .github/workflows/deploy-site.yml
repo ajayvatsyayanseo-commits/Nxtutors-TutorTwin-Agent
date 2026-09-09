@@ -126,6 +126,9 @@ jobs:
           '"
 
       - name: Verify it is actually serving
+        env:
+          TARGET: ${{ secrets.DEPLOY_SITE_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_SITE_PATH }}
         run: |
           # A deploy that restarts a process and never checks is a deploy that
           # reports success while the site returns 502.
@@ -134,4 +137,12 @@ jobs:
             [ "$code" = "200" ] && echo "site is up" && exit 0
             sleep 6
           done
-          echo "site did not return 200 after 60s"; exit 1
+          echo "site did not return 200 after 60s (last code: $code)"
+          # A 502 means nginx is healthy and the app is not listening. Only the
+          # server can say why, so fetch the evidence rather than leaving a
+          # bare "did not return 200" for someone to go and look up by hand.
+          echo "--- is there a runtime on PATH? ---"
+          $SSH_CMD "$TARGET" "command -v node || echo 'MISSING: node not on PATH'" || true
+          echo "--- last 60 lines of site.log ---"
+          $SSH_CMD "$TARGET" "tail -60 $DEST/site.log 2>/dev/null || echo '(no site.log - the process never wrote one)'" || true
+          exit 1

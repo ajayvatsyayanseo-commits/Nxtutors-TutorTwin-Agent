@@ -217,6 +217,9 @@ jobs:
             | $SSH_CMD "$TARGET" bash -s
 
       - name: Verify the service is healthy
+        env:
+          TARGET: ${{ secrets.DEPLOY_API_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEST: ${{ secrets.DEPLOY_API_PATH }}
         run: |
           # /readyz touches the database. /healthz alone would pass while the
           # service could not reach Postgres at all.
@@ -225,7 +228,15 @@ jobs:
             [ "$code" = "200" ] && echo "api is ready" && exit 0
             sleep 5
           done
-          echo "api did not become ready within 60s"; exit 1
+          echo "api did not become ready within 60s (last code: $code)"
+          # A 502 means nginx is healthy and the app is not listening. Only the
+          # server can say why, so fetch the evidence rather than leaving a
+          # bare "did not return 200" for someone to go and look up by hand.
+          echo "--- is there a runtime on PATH? ---"
+          $SSH_CMD "$TARGET" "command -v python3.12 || echo 'MISSING: python3.12 not on PATH'" || true
+          echo "--- last 60 lines of api.log ---"
+          $SSH_CMD "$TARGET" "tail -60 $DEST/api.log 2>/dev/null || echo '(no api.log - the process never wrote one)'" || true
+          exit 1
 
       - name: Verify the Meta webhook still answers
         run: |
